@@ -1,0 +1,13 @@
+{
+  "presubmit": [
+    {
+      "name": "PlatformComposeSceneTransitionLayoutTests"
+    },
+    {
+      "name": "PlatformComposeCoreTests"
+    },
+    {
+      "name": "SystemUIComposeGalleryTests"
+    }
+  ]
+}
