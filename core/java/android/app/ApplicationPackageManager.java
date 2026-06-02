@@ -1496,22 +1496,36 @@ public class ApplicationPackageManager extends PackageManager {
 
     @Override
     public ResolveInfo resolveActivity(Intent intent, ResolveInfoFlags flags) {
-        return resolveActivityAsUser(intent, flags, getUserId());
+        return resolveActivityAsUser(intent, /* resolvedType= */ null, flags, getUserId());
     }
 
     @Override
     public ResolveInfo resolveActivityAsUser(Intent intent, int flags, int userId) {
-        return resolveActivityAsUser(intent, ResolveInfoFlags.of(flags), userId);
+        return resolveActivityAsUser(intent, /* resolvedType= */ null, ResolveInfoFlags.of(flags),
+                userId);
     }
 
     @Override
     public ResolveInfo resolveActivityAsUser(Intent intent, ResolveInfoFlags flags, int userId) {
+        return resolveActivityAsUser(intent, /* resolvedType= */ null, flags, userId);
+    }
+
+    @Override
+    public ResolveInfo resolveActivityAsUser(Intent intent, String resolvedType,
+            int flags, int userId) {
+        return resolveActivityAsUser(intent, resolvedType,
+                ResolveInfoFlags.of(flags), userId);
+    }
+
+    @Override
+    public ResolveInfo resolveActivityAsUser(Intent intent, String resolvedType,
+            ResolveInfoFlags flags, int userId) {
         try {
-            return mPM.resolveIntent(
-                intent,
-                intent.resolveTypeIfNeeded(mContext.getContentResolver()),
-                updateFlagsForComponent(flags.getValue(), userId, intent),
-                userId);
+            return mPM.resolveIntent(intent,
+                    resolvedType == null
+                        ? intent.resolveTypeIfNeeded(mContext.getContentResolver())
+                        : resolvedType,
+                    updateFlagsForComponent(flags.getValue(), userId, intent), userId);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -2157,6 +2171,11 @@ public class ApplicationPackageManager extends PackageManager {
                 app.resourceDirs, app.overlayPaths, app.sharedLibraryFiles,
                 mContext.mPackageInfo, configuration);
         if (r != null) {
+            if (android.content.res.Flags.defaultLocale()
+                    && r.getConfiguration().getLocales().size() > 1) {
+                LocaleConfig lc = new LocaleConfig(app, r);
+                r.setLocaleConfig(lc);
+            }
             return r;
         }
         throw new NameNotFoundException("Unable to open " + app.publicSourceDir);
@@ -2237,9 +2256,6 @@ public class ApplicationPackageManager extends PackageManager {
 
     private static boolean isSystemFeaturesCacheEnabledAndAvailable() {
         if (!android.content.pm.Flags.cacheSdkSystemFeatures()) {
-            return false;
-        }
-        if (!com.android.internal.os.Flags.applicationSharedMemoryEnabled()) {
             return false;
         }
         if (ActivityThread.isSystem() && !SystemFeaturesCache.hasInstance()) {

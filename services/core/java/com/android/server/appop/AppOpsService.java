@@ -275,7 +275,6 @@ public class AppOpsService extends IAppOpsService.Stub {
             Process.SHELL_UID};
 
     final Context mContext;
-    final AtomicFile mStorageFile;
     final AtomicFile mRecentAccessesFile;
     private final @Nullable File mNoteOpCallerStacktracesFile;
     /* AMS handler, this shouldn't be used for IO */
@@ -1005,9 +1004,13 @@ public class AppOpsService extends IAppOpsService.Stub {
         }
     }
 
+    public AppOpsService(Handler handler, Context context) {
+        this(new File(SystemServiceManager.ensureSystemDir(), "appops_accesses.xml"),
+                handler, context);
+    }
+
     @VisibleForTesting
-    public AppOpsService(File recentAccessesFile, File storageFile, Handler handler,
-            Context context) {
+    public AppOpsService(File recentAccessesFile, Handler handler, Context context) {
         mContext = context;
         mKnownDeviceIds.put(Context.DEVICE_ID_DEFAULT, PERSISTENT_DEVICE_ID_DEFAULT);
 
@@ -1016,14 +1019,8 @@ public class AppOpsService extends IAppOpsService.Stub {
             mSwitchedOps.put(switchCode,
                     ArrayUtils.appendInt(mSwitchedOps.get(switchCode), switchedCode));
         }
-        if (PermissionManager.USE_ACCESS_CHECKING_SERVICE) {
-            mAppOpsCheckingService = new AppOpsCheckingServiceTracingDecorator(
-                    LocalServices.getService(AppOpsCheckingServiceInterface.class));
-        } else {
-            mAppOpsCheckingService = new AppOpsCheckingServiceTracingDecorator(
-                    new AppOpsCheckingServiceImpl(storageFile, this, handler, context,
-                            mSwitchedOps));
-        }
+        mAppOpsCheckingService = LocalServices.getService(AppOpsCheckingServiceInterface.class);
+
         mAppOpsCheckingService.addAppOpsModeChangedListener(
                 new AppOpsCheckingServiceInterface.AppOpsModeChangedListener() {
                     @Override
@@ -1049,7 +1046,6 @@ public class AppOpsService extends IAppOpsService.Stub {
                 code -> notifyWatchersOnDefaultDevice(code, UID_ANY));
 
         LockGuard.installLock(this, LockGuard.INDEX_APP_OPS);
-        mStorageFile = new AtomicFile(storageFile, "appops_legacy");
         mRecentAccessesFile = new AtomicFile(recentAccessesFile, "appops_accesses");
         mRecentAccessPersistence = new AppOpsRecentAccessPersistence(mRecentAccessesFile, this);
 
@@ -1072,7 +1068,7 @@ public class AppOpsService extends IAppOpsService.Stub {
         AppOpsManager.disableAppOpModeCache();
 
         if (Flags.enableAllSqliteAppopsAccesses()) {
-            mHistoricalRegistry = new HistoricalRegistrySql(context);
+            mHistoricalRegistry = new HistoricalRegistry(context);
         } else {
             mHistoricalRegistry = new LegacyHistoricalRegistry(this, context);
         }
@@ -1483,20 +1479,18 @@ public class AppOpsService extends IAppOpsService.Stub {
     }
 
     public void uidRemoved(int uid) {
-        if (Flags.dontRemoveExistingUidStates()) {
-            // b/358365471 If apps sharing UID are installed on multiple users and only one of
-            // them is installed for a single user while keeping the others we observe this
-            // subroutine get invoked incorrectly since the UID still exists.
-            final long token = Binder.clearCallingIdentity();
-            try {
-                String uidName = getPackageManagerInternal().getNameForUid(uid);
-                if (uidName != null) {
-                    Slog.e(TAG, "Tried to remove existing UID. uid: " + uid + " name: " + uidName);
-                    return;
-                }
-            } finally {
-                Binder.restoreCallingIdentity(token);
+        // b/358365471 If apps sharing UID are installed on multiple users and only one of
+        // them is installed for a single user while keeping the others we observe this
+        // subroutine get invoked incorrectly since the UID still exists.
+        final long token = Binder.clearCallingIdentity();
+        try {
+            String uidName = getPackageManagerInternal().getNameForUid(uid);
+            if (uidName != null) {
+                Slog.e(TAG, "Tried to remove existing UID. uid: " + uid + " name: " + uidName);
+                return;
             }
+        } finally {
+            Binder.restoreCallingIdentity(token);
         }
 
         synchronized (this) {
@@ -2930,8 +2924,7 @@ public class AppOpsService extends IAppOpsService.Stub {
      */
     private static boolean isOpAllowedForUid(int uid) {
         int appId = UserHandle.getAppId(uid);
-        return Flags.runtimePermissionAppopsMappingEnabled()
-                && (appId == Process.ROOT_UID || appId == Process.SYSTEM_UID);
+        return appId == Process.ROOT_UID || appId == Process.SYSTEM_UID;
     }
 
     @Override
@@ -3462,7 +3455,7 @@ public class AppOpsService extends IAppOpsService.Stub {
             final UidState uidState = ops.uidState;
             if (isOpRestrictedLocked(uid, code, packageName, attributionTag, virtualDeviceId,
                     pvr.bypass, false)) {
-                attributedOp.rejected(uidState.getState(), flags);
+                attributedOp.rejected(uidState.getState(), flags, notedCount);
                 scheduleOpNotedIfNeededLocked(code, uid, packageName, attributionTag,
                         virtualDeviceId, flags, AppOpsManager.MODE_IGNORED);
                 return new SyncNotedAppOp(AppOpsManager.MODE_IGNORED, code, attributionTag,
@@ -3487,7 +3480,7 @@ public class AppOpsService extends IAppOpsService.Stub {
                     if (DEBUG) Slog.d(TAG, "noteOperation: uid reject #" + uidMode + " for code "
                             + switchCode + " (" + code + ") uid " + uid + " package "
                             + packageName + " flags: " + AppOpsManager.flagsToString(flags));
-                    attributedOp.rejected(uidState.getState(), flags);
+                    attributedOp.rejected(uidState.getState(), flags, notedCount);
                     scheduleOpNotedIfNeededLocked(code, uid, packageName, attributionTag,
                             virtualDeviceId, flags, uidMode);
                     // TODO(b/333931259): Remove extra logging after this issue is diagnosed.
@@ -3511,7 +3504,7 @@ public class AppOpsService extends IAppOpsService.Stub {
                     if (DEBUG) Slog.d(TAG, "noteOperation: reject #" + mode + " for code "
                             + switchCode + " (" + code + ") uid " + uid + " package "
                             + packageName + " flags: " + AppOpsManager.flagsToString(flags));
-                    attributedOp.rejected(uidState.getState(), flags);
+                    attributedOp.rejected(uidState.getState(), flags, notedCount);
                     scheduleOpNotedIfNeededLocked(code, uid, packageName, attributionTag,
                             virtualDeviceId, flags, mode);
                     // TODO(b/333931259): Remove extra logging after this issue is diagnosed.
@@ -4126,7 +4119,7 @@ public class AppOpsService extends IAppOpsService.Stub {
                                 + packageName + " flags: "
                                 + AppOpsManager.flagsToString(flags));
                     }
-                    attributedOp.rejected(uidState.getState(), flags);
+                    attributedOp.rejected(uidState.getState(), flags, 1);
                     scheduleOpStartedIfNeededLocked(code, uid, packageName, attributionTag,
                             virtualDeviceId, flags, uidMode, startType, attributionFlags,
                             attributionChainId);
@@ -4150,7 +4143,7 @@ public class AppOpsService extends IAppOpsService.Stub {
                                 + packageName + " flags: "
                                 + AppOpsManager.flagsToString(flags));
                     }
-                    attributedOp.rejected(uidState.getState(), flags);
+                    attributedOp.rejected(uidState.getState(), flags, 1);
                     scheduleOpStartedIfNeededLocked(code, uid, packageName, attributionTag,
                             virtualDeviceId, flags, mode, startType, attributionFlags,
                             attributionChainId);
@@ -4381,30 +4374,40 @@ public class AppOpsService extends IAppOpsService.Stub {
             return null;
         }
 
-        finishOperationUnchecked(clientId, code, proxiedUid, resolvedProxiedPackageName,
-                proxiedAttributionTag, proxyVirtualDeviceId);
+        finishOperationUnchecked(clientId, code, proxyUid, resolvedProxyPackageName,
+                proxiedUid, resolvedProxiedPackageName, proxiedAttributionTag,
+                proxyVirtualDeviceId);
 
         return null;
     }
+    private void finishOperationUnchecked(IBinder clientId, int code, int uid,
+            String packageName, String attributionTag, int virtualDeviceId) {
+        finishOperationUnchecked(clientId, code, -1, null, uid, packageName, attributionTag,
+                virtualDeviceId);
+    }
 
-    private void finishOperationUnchecked(IBinder clientId, int code, int uid, String packageName,
-            String attributionTag, int virtualDeviceId) {
+    private void finishOperationUnchecked(IBinder clientId, int code, int proxyUid,
+            String proxyPackageName, int proxiedUid,
+            String proxiedPackageName, String attributionTag,
+            int virtualDeviceId) {
         PackageVerificationResult pvr;
         try {
-            pvr = verifyAndGetBypass(uid, packageName, attributionTag);
+            pvr = verifyAndGetBypass(proxiedUid, proxiedPackageName, attributionTag,
+                    proxyUid, proxyPackageName);
             if (!pvr.isAttributionTagValid) {
                 attributionTag = null;
             }
         } catch (SecurityException e) {
-            logVerifyAndGetBypassFailure(uid, e, "finishOperation");
+            logVerifyAndGetBypassFailure(proxiedUid, e, "finishOperation");
             return;
         }
 
         synchronized (this) {
-            Op op = getOpLocked(code, uid, packageName, attributionTag, pvr.isAttributionTagValid,
-                    pvr.bypass, /* edit */ true);
+            Op op = getOpLocked(code, proxiedUid, proxiedPackageName, attributionTag,
+                    pvr.isAttributionTagValid, pvr.bypass, /* edit */ true);
             if (op == null) {
-                Slog.e(TAG, "Operation not found: uid=" + uid + " pkg=" + packageName + "("
+                Slog.e(TAG, "Operation not found: uid=" + proxiedUid + " pkg=" + proxiedPackageName
+                        + "("
                         + attributionTag + ") op=" + AppOpsManager.opToName(code));
                 return;
             }
@@ -4413,7 +4416,8 @@ public class AppOpsService extends IAppOpsService.Stub {
                             getPersistentDeviceIdForOp(virtualDeviceId, code),
                             new ArrayMap<>()).get(attributionTag);
             if (attributedOp == null) {
-                Slog.e(TAG, "Attribution not found: uid=" + uid + " pkg=" + packageName + "("
+                Slog.e(TAG, "Attribution not found: uid=" + proxiedUid
+                        + " pkg=" + proxiedPackageName + "("
                         + attributionTag + ") op=" + AppOpsManager.opToName(code));
                 return;
             }
@@ -4421,7 +4425,8 @@ public class AppOpsService extends IAppOpsService.Stub {
             if (attributedOp.isRunning() || attributedOp.isPaused()) {
                 attributedOp.finished(clientId);
             } else {
-                Slog.e(TAG, "Operation not started: uid=" + uid + " pkg=" + packageName + "("
+                Slog.e(TAG, "Operation not started: uid=" + proxiedUid
+                        + " pkg=" + proxiedPackageName + "("
                         + attributionTag + ") op=" + AppOpsManager.opToName(code));
             }
         }
@@ -4901,9 +4906,13 @@ public class AppOpsService extends IAppOpsService.Stub {
             @Nullable String attributionTag, int proxyUid, @Nullable String proxyPackageName,
             boolean suppressErrorLogs) {
         if (uid == Process.ROOT_UID) {
-            // For backwards compatibility, don't check package name for root UID.
+            // For backwards compatibility, don't check package name for root UID, unless someone
+            // is claiming to be a proxy for root, which should never happen in normal usage.
+            // We only allow bypassing the attribution tag verification if the proxy is a
+            // system app (or is null), in order to prevent abusive apps clogging the appops
+            // system with unlimited attribution tags via proxy calls.
             return new PackageVerificationResult(null,
-                    /* isAttributionTagValid */ true);
+                    /* isAttributionTagValid */ isPackageNullOrSystem(proxyPackageName, proxyUid));
         }
         if (Process.isSdkSandboxUid(uid)) {
             // SDK sandbox processes run in their own UID range, but their associated
@@ -4966,16 +4975,8 @@ public class AppOpsService extends IAppOpsService.Stub {
             // We only allow bypassing the attribution tag verification if the proxy is a
             // system app (or is null), in order to prevent abusive apps clogging the appops
             // system with unlimited attribution tags via proxy calls.
-            boolean proxyIsSystemAppOrNull = true;
-            if (proxyPackageName != null) {
-                int proxyAppId = UserHandle.getAppId(proxyUid);
-                if (proxyAppId >= Process.FIRST_APPLICATION_UID) {
-                    proxyIsSystemAppOrNull =
-                            mPackageManagerInternal.isSystemPackage(proxyPackageName);
-                }
-            }
             return new PackageVerificationResult(RestrictionBypass.UNRESTRICTED,
-                    /* isAttributionTagValid */ proxyIsSystemAppOrNull);
+                    /* isAttributionTagValid */ isPackageNullOrSystem(proxyPackageName, proxyUid));
         }
 
         int userId = UserHandle.getUserId(uid);
@@ -5038,6 +5039,17 @@ public class AppOpsService extends IAppOpsService.Stub {
         }
 
         return new PackageVerificationResult(bypass, isAttributionTagValid);
+    }
+
+    private boolean isPackageNullOrSystem(String packageName, int uid) {
+        if (packageName == null) {
+            return true;
+        }
+        int appId = UserHandle.getAppId(uid);
+        if (appId > 0 && appId < Process.FIRST_APPLICATION_UID) {
+            return true;
+        }
+        return mPackageManagerInternal.isSystemPackage(packageName);
     }
 
     private boolean isAttributionInPackage(@Nullable AndroidPackage pkg,
@@ -5280,7 +5292,9 @@ public class AppOpsService extends IAppOpsService.Stub {
      */
     private void readRecentAccesses() {
         if (!mRecentAccessesFile.exists()) {
-            readRecentAccesses(mStorageFile);
+            final File legacyFile =
+                    new File(SystemServiceManager.ensureSystemDir(), "appops.xml");
+            readRecentAccesses(new AtomicFile(legacyFile, "appops_legacy"));
         } else {
             if (deviceAwareAppOpNewSchemaEnabled()) {
                 synchronized (this) {
@@ -6123,6 +6137,8 @@ public class AppOpsService extends IAppOpsService.Stub {
         pw.println("    Limit output to data associated with the given attribution tag.");
         pw.println("  --include-discrete [n]");
         pw.println("    Include discrete ops limited to n per dimension. Use zero for no limit.");
+        pw.println("  --history-limit [n]");
+        pw.println("    Include app ops limited to n recent records. Use zero for no limit.");
         pw.println("  --watchers");
         pw.println("    Only output the watcher sections.");
         pw.println("  --history");
@@ -6271,11 +6287,10 @@ public class AppOpsService extends IAppOpsService.Stub {
         int dumpUid = Process.INVALID_UID;
         int dumpMode = -1;
         boolean dumpWatchers = false;
-        // TODO ntmyren: Remove the dumpHistory and dumpFilter
         boolean dumpHistory = false;
         boolean includeDiscreteOps = false;
         boolean dumpUidStateChangeLogs = false;
-        int nDiscreteOps = 10;
+        int historyLimit = 100;
         @HistoricalOpsRequestFilter int dumpFilter = 0;
         boolean dumpAll = false;
 
@@ -6346,12 +6361,24 @@ public class AppOpsService extends IAppOpsService.Stub {
                         return;
                     }
                     try {
-                        nDiscreteOps = Integer.valueOf(args[i]);
+                        historyLimit = Integer.valueOf(args[i]);
                     } catch (NumberFormatException e) {
                         pw.println("Wrong parameter: " + args[i]);
                         return;
                     }
                     includeDiscreteOps = true;
+                } else if ("--history-limit".equals(arg)) {
+                    i++;
+                    if (i >= args.length) {
+                        pw.println("No argument for --history-limit option");
+                        return;
+                    }
+                    try {
+                        historyLimit = Integer.valueOf(args[i]);
+                    } catch (NumberFormatException e) {
+                        pw.println("Wrong parameter: " + args[i]);
+                        return;
+                    }
                 } else if ("--history".equals(arg)) {
                     dumpHistory = true;
                 } else if (arg.length() > 0 && arg.charAt(0) == '-') {
@@ -6753,15 +6780,21 @@ public class AppOpsService extends IAppOpsService.Stub {
             }
         }
 
-        // Must not hold the appops lock
-        if (dumpHistory && !dumpWatchers) {
-            mHistoricalRegistry.dump("  ", pw, dumpUid, dumpPackage, dumpAttributionTag, dumpOp,
-                    dumpFilter);
-        }
-        if (includeDiscreteOps) {
-            pw.println("Discrete accesses: ");
-            mHistoricalRegistry.dumpDiscreteData(pw, dumpUid, dumpPackage, dumpAttributionTag,
-                    dumpFilter, dumpOp, sdf, date, "  ", nDiscreteOps);
+        if (Flags.enableAllSqliteAppopsAccesses()) {
+            mHistoricalRegistry.dump("", pw, dumpUid, dumpPackage, dumpAttributionTag,
+                    dumpOp, dumpFilter, sdf, date, includeDiscreteOps, historyLimit,
+                    dumpHistory && !dumpWatchers);
+        } else {
+            // Must not hold the appops lock
+            if (dumpHistory && !dumpWatchers) {
+                mHistoricalRegistry.dumpAggregatedData("  ", pw, dumpUid, dumpPackage,
+                        dumpAttributionTag, dumpOp, dumpFilter, sdf, date);
+            }
+            if (includeDiscreteOps) {
+                pw.println("Discrete accesses: ");
+                mHistoricalRegistry.dumpDiscreteData(pw, dumpUid, dumpPackage, dumpAttributionTag,
+                        dumpFilter, dumpOp, sdf, date, "  ", historyLimit);
+            }
         }
     }
 
@@ -7016,6 +7049,7 @@ public class AppOpsService extends IAppOpsService.Stub {
         offsetHistory_enforcePermission();
         // Must not hold the appops lock
         mHistoricalRegistry.offsetHistory(offsetMillis);
+        mHistoricalRegistry.offsetDiscreteHistory(offsetMillis);
     }
 
     @android.annotation.EnforcePermission(android.Manifest.permission.MANAGE_APPOPS)
@@ -7057,8 +7091,8 @@ public class AppOpsService extends IAppOpsService.Stub {
         }
 
         if (Flags.enableAllSqliteAppopsAccesses()) {
-            mHistoricalRegistry = new HistoricalRegistrySql(
-                    (HistoricalRegistrySql) mHistoricalRegistry);
+            mHistoricalRegistry = new HistoricalRegistry(
+                    (HistoricalRegistry) mHistoricalRegistry);
         } else {
             mHistoricalRegistry = new LegacyHistoricalRegistry(
                     (LegacyHistoricalRegistry) mHistoricalRegistry);

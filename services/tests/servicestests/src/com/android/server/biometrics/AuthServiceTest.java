@@ -19,7 +19,6 @@ package com.android.server.biometrics;
 import static android.Manifest.permission.MANAGE_BIOMETRIC;
 import static android.Manifest.permission.TEST_BIOMETRIC;
 import static android.Manifest.permission.USE_BIOMETRIC_INTERNAL;
-import static android.adaptiveauth.Flags.FLAG_REPORT_BIOMETRIC_AUTH_ATTEMPTS;
 import static android.hardware.biometrics.BiometricAuthenticator.TYPE_NONE;
 import static android.hardware.biometrics.BiometricConstants.BIOMETRIC_ERROR_CANCELED;
 import static android.hardware.biometrics.BiometricConstants.BIOMETRIC_SUCCESS;
@@ -49,11 +48,14 @@ import android.hardware.biometrics.IBiometricEnabledOnKeyguardCallback;
 import android.hardware.biometrics.IBiometricService;
 import android.hardware.biometrics.IBiometricServiceReceiver;
 import android.hardware.biometrics.PromptInfo;
+import android.hardware.biometrics.SensorProperties;
 import android.hardware.biometrics.fingerprint.SensorProps;
 import android.hardware.face.FaceSensorConfigurations;
+import android.hardware.face.FaceSensorProperties;
 import android.hardware.face.FaceSensorPropertiesInternal;
 import android.hardware.face.IFaceService;
 import android.hardware.fingerprint.FingerprintSensorConfigurations;
+import android.hardware.fingerprint.FingerprintSensorProperties;
 import android.hardware.fingerprint.FingerprintSensorPropertiesInternal;
 import android.hardware.fingerprint.IFingerprintService;
 import android.hardware.iris.IIrisService;
@@ -84,6 +86,7 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.mockito.stubbing.Stubber;
 
+import java.util.ArrayList;
 import java.util.List;
 
 @Presubmit
@@ -471,7 +474,6 @@ public class AuthServiceTest {
 
     @Test
     public void testRegisterAuthenticationStateListener_callsFaceService() throws Exception {
-        mSetFlagsRule.enableFlags(FLAG_REPORT_BIOMETRIC_AUTH_ATTEMPTS);
         setInternalAndTestBiometricPermissions(mContext, true /* hasPermission */);
 
         mAuthService = new AuthService(mContext, mInjector);
@@ -517,6 +519,41 @@ public class AuthServiceTest {
 
         waitForIdle();
         verify(mBiometricService).getLastAuthenticationTime(eq(mUserId), eq(authenticators));
+    }
+
+    @Test
+    public void testGetEnrollmentStatus_callsFingerprintAndFaceService() throws Exception {
+        setInternalAndTestBiometricPermissions(mContext, true /* hasPermission */);
+        List<FaceSensorPropertiesInternal> faceProps = List.of(new FaceSensorPropertiesInternal(
+                0 /* id */,
+                FaceSensorProperties.STRENGTH_STRONG,
+                1 /* maxTemplatesAllowed */,
+                new ArrayList<>() /* componentInfo */,
+                FaceSensorProperties.TYPE_UNKNOWN,
+                true /* supportsFaceDetection */,
+                true /* supportsSelfIllumination */,
+                false /* resetLockoutRequiresChallenge */));
+        List<FingerprintSensorPropertiesInternal> fpProps = List.of(
+                new FingerprintSensorPropertiesInternal(1 /* id */,
+                        SensorProperties.STRENGTH_STRONG,
+                        5 /* maxEnrollmentsPerUser */,
+                        new ArrayList<>() /* componentInfo */,
+                        FingerprintSensorProperties.TYPE_UDFPS_OPTICAL,
+                        false /* resetLockoutRequiresHardwareAuthToken */));
+        when(mFaceService.getSensorPropertiesInternal(eq(TEST_OP_PACKAGE_NAME))).thenReturn(
+                faceProps);
+        when(mFingerprintService.getSensorPropertiesInternal(eq(TEST_OP_PACKAGE_NAME))).thenReturn(
+                fpProps);
+        when(mContext.getAttributionTag()).thenReturn("tag");
+        mAuthService = new AuthService(mContext, mInjector);
+        mAuthService.onStart();
+
+        mAuthService.mImpl.getEnrollmentStatusList(TEST_OP_PACKAGE_NAME);
+
+        waitForIdle();
+        verify(mFaceService).getEnrolledFaces(eq(0), eq(mUserId), eq(TEST_OP_PACKAGE_NAME));
+        verify(mFingerprintService).getEnrolledFingerprints(eq(mUserId), eq(TEST_OP_PACKAGE_NAME),
+                eq("tag"));
     }
 
     private static void setInternalAndTestBiometricPermissions(

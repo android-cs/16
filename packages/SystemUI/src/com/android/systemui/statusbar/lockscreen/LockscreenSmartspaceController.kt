@@ -42,14 +42,12 @@ import com.android.keyguard.KeyguardUpdateMonitor
 import com.android.keyguard.KeyguardUpdateMonitorCallback
 import com.android.settingslib.Utils
 import com.android.systemui.Dumpable
-import com.android.systemui.Flags.smartspaceLockscreenViewmodel
 import com.android.systemui.dagger.SysUISingleton
 import com.android.systemui.dagger.qualifiers.Background
 import com.android.systemui.dagger.qualifiers.Main
 import com.android.systemui.dump.DumpManager
 import com.android.systemui.flags.FeatureFlags
 import com.android.systemui.flags.Flags
-import com.android.systemui.keyguard.WakefulnessLifecycle
 import com.android.systemui.plugins.ActivityStarter
 import com.android.systemui.plugins.BcSmartspaceConfigPlugin
 import com.android.systemui.plugins.BcSmartspaceDataPlugin
@@ -102,7 +100,6 @@ constructor(
     private val deviceProvisionedController: DeviceProvisionedController,
     private val bypassController: KeyguardBypassController,
     private val keyguardUpdateMonitor: KeyguardUpdateMonitor,
-    private val wakefulnessLifecycle: WakefulnessLifecycle,
     private val smartspaceViewModelFactory: SmartspaceViewModel.Factory,
     private val dumpManager: DumpManager,
     private val execution: Execution,
@@ -142,6 +139,8 @@ constructor(
     private var showSensitiveContentForManagedUser = false
     private var managedUserHandle: UserHandle? = null
     private var mSplitShadeEnabled = false
+
+    private val refreshInvoker: () -> Unit = { session?.requestSmartspaceUpdate() }
 
     var suppressDisconnects = false
         set(value) {
@@ -296,18 +295,6 @@ constructor(
             }
         }
 
-    // TODO(b/331451011): Refactor to viewmodel and use interactor pattern.
-    private val wakefulnessLifecycleObserver =
-        object : WakefulnessLifecycle.Observer {
-            override fun onStartedWakingUp() {
-                smartspaceViews.forEach { it.setScreenOn(true) }
-            }
-
-            override fun onFinishedGoingToSleep() {
-                smartspaceViews.forEach { it.setScreenOn(false) }
-            }
-        }
-
     init {
         deviceProvisionedController.addCallback(deviceProvisionedListener)
         dumpManager.registerDumpable(this)
@@ -346,7 +333,7 @@ constructor(
                 surfaceName = SmartspaceViewModel.SURFACE_DATE_VIEW,
                 parent = parent,
                 plugin = datePlugin,
-                isLargeClock = isLargeClock
+                isLargeClock = isLargeClock,
             )
         connectSession()
 
@@ -415,9 +402,7 @@ constructor(
         ssView.setBgHandler(bgHandler)
         ssView.setUiSurface(BcSmartspaceDataPlugin.UI_SURFACE_LOCK_SCREEN_AOD)
         ssView.setTimeChangedDelegate(SmartspaceTimeChangedDelegate(keyguardUpdateMonitor))
-        ssView.registerDataProvider(plugin)
-
-        ssView.setIntentStarter(
+        plugin.setIntentStarter(
             object : BcSmartspaceDataPlugin.IntentStarter {
                 override fun startIntent(view: View, intent: Intent, showOnLockscreen: Boolean) {
                     if (showOnLockscreen) {
@@ -452,16 +437,20 @@ constructor(
                 }
             }
         )
+
+        ssView.registerDataProvider(plugin)
         ssView.setFalsingManager(falsingManager)
         ssView.setKeyguardBypassEnabled(bypassController.bypassEnabled)
         return (ssView as View).apply {
             setTag(R.id.tag_smartspace_view, Any())
             addOnAttachStateChangeListener(stateChangeListener)
 
-            if (smartspaceLockscreenViewmodel()) {
-                val viewModel = smartspaceViewModelFactory.create(surfaceName)
-                SmartspaceViewBinder.bind(smartspaceView = ssView, viewModel = viewModel)
-            }
+            val viewModel = smartspaceViewModelFactory.create(surfaceName)
+            SmartspaceViewBinder.bind(
+                smartspaceView = ssView,
+                refreshInvoker = refreshInvoker,
+                viewModel = viewModel,
+            )
         }
     }
 
@@ -517,13 +506,10 @@ constructor(
         configurationController.addCallback(configChangeListener)
         statusBarStateController.addCallback(statusBarStateListener)
         bypassController.registerOnBypassStateChangedListener(bypassStateChangedListener)
-        if (!smartspaceLockscreenViewmodel()) {
-            wakefulnessLifecycle.addObserver(wakefulnessLifecycleObserver)
-        }
 
-        datePlugin?.registerSmartspaceEventNotifier { e -> session?.notifySmartspaceEvent(e) }
-        weatherPlugin?.registerSmartspaceEventNotifier { e -> session?.notifySmartspaceEvent(e) }
-        plugin?.registerSmartspaceEventNotifier { e -> session?.notifySmartspaceEvent(e) }
+        datePlugin?.setEventDispatcher { e -> session?.notifySmartspaceEvent(e) }
+        weatherPlugin?.setEventDispatcher { e -> session?.notifySmartspaceEvent(e) }
+        plugin?.setEventDispatcher { e -> session?.notifySmartspaceEvent(e) }
 
         updateBypassEnabled()
         reloadSmartspace()
@@ -559,17 +545,14 @@ constructor(
         configurationController.removeCallback(configChangeListener)
         statusBarStateController.removeCallback(statusBarStateListener)
         bypassController.unregisterOnBypassStateChangedListener(bypassStateChangedListener)
-        if (!smartspaceLockscreenViewmodel()) {
-            wakefulnessLifecycle.removeObserver(wakefulnessLifecycleObserver)
-        }
         session = null
 
-        datePlugin?.registerSmartspaceEventNotifier(null)
+        datePlugin?.setEventDispatcher(null)
 
-        weatherPlugin?.registerSmartspaceEventNotifier(null)
+        weatherPlugin?.setEventDispatcher(null)
         weatherPlugin?.onTargetsAvailable(emptyList())
 
-        plugin?.registerSmartspaceEventNotifier(null)
+        plugin?.setEventDispatcher(null)
         plugin?.onTargetsAvailable(emptyList())
 
         Log.d(TAG, "Ended smartspace session for lockscreen")
@@ -610,6 +593,7 @@ constructor(
             userTracker.userHandle -> {
                 !t.isSensitive || showSensitiveContentForCurrentUser
             }
+
             managedUserHandle -> {
                 // Really, this should be "if this managed profile is associated with the current
                 // active user", but we don't have a good way to check that, so instead we cheat:
@@ -618,6 +602,7 @@ constructor(
                 userTracker.userHandle.identifier == UserHandle.USER_SYSTEM &&
                     (!t.isSensitive || showSensitiveContentForManagedUser)
             }
+
             else -> {
                 false
             }

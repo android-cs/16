@@ -25,6 +25,7 @@ import android.view.Display;
 
 import androidx.annotation.Nullable;
 
+import com.android.app.displaylib.PerDisplayRepository;
 import com.android.internal.statusbar.IStatusBarService;
 import com.android.keyguard.dagger.ClockRegistryModule;
 import com.android.keyguard.dagger.KeyguardBouncerComponent;
@@ -63,16 +64,17 @@ import com.android.systemui.dagger.qualifiers.Main;
 import com.android.systemui.dagger.qualifiers.SystemUser;
 import com.android.systemui.dagger.qualifiers.UiBackground;
 import com.android.systemui.demomode.dagger.DemoModeModule;
+import com.android.systemui.desktop.dagger.DesktopModule;
 import com.android.systemui.deviceentry.DeviceEntryModule;
 import com.android.systemui.display.DisplayModule;
-import com.android.app.displaylib.PerDisplayRepository;
-import com.android.systemui.display.dagger.SystemUIDisplaySubcomponent;
 import com.android.systemui.doze.dagger.DozeComponent;
 import com.android.systemui.dreams.dagger.DreamModule;
 import com.android.systemui.flags.FeatureFlags;
 import com.android.systemui.flags.FlagDependenciesModule;
 import com.android.systemui.flags.FlagsModule;
+import com.android.systemui.growth.dagger.GrowthModule;
 import com.android.systemui.haptics.msdl.dagger.MSDLModule;
+import com.android.systemui.inputdevice.InputDeviceModule;
 import com.android.systemui.inputmethod.InputMethodModule;
 import com.android.systemui.keyboard.KeyboardModule;
 import com.android.systemui.keyevent.data.repository.KeyEventRepositoryModule;
@@ -83,7 +85,8 @@ import com.android.systemui.keyguard.ui.composable.LockscreenContent;
 import com.android.systemui.log.dagger.LogModule;
 import com.android.systemui.log.dagger.MonitorLog;
 import com.android.systemui.log.table.TableLogBuffer;
-import com.android.systemui.lowlightclock.dagger.LowLightModule;
+import com.android.systemui.lowlight.dagger.LowLightModule;
+import com.android.systemui.lowlightclock.dagger.LowLightClockModule;
 import com.android.systemui.mediaprojection.MediaProjectionModule;
 import com.android.systemui.mediaprojection.appselector.MediaProjectionActivitiesModule;
 import com.android.systemui.mediaprojection.taskswitcher.MediaProjectionTaskSwitcherModule;
@@ -100,7 +103,6 @@ import com.android.systemui.privacy.PrivacyModule;
 import com.android.systemui.process.condition.SystemProcessCondition;
 import com.android.systemui.qs.FgsManagerController;
 import com.android.systemui.qs.FgsManagerControllerImpl;
-import com.android.systemui.qs.QSFragmentStartableModule;
 import com.android.systemui.qs.footer.dagger.FooterActionsModule;
 import com.android.systemui.qs.tiles.impl.qr.ui.model.QRCodeScannerModule;
 import com.android.systemui.recents.Recents;
@@ -131,6 +133,7 @@ import com.android.systemui.statusbar.dagger.StatusBarModule;
 import com.android.systemui.statusbar.disableflags.dagger.DisableFlagsModule;
 import com.android.systemui.statusbar.events.StatusBarEventsModule;
 import com.android.systemui.statusbar.events.SystemStatusAnimationScheduler;
+import com.android.systemui.statusbar.featurepods.vc.AvControlsChipModule;
 import com.android.systemui.statusbar.notification.NotifPipelineFlags;
 import com.android.systemui.statusbar.notification.collection.NotifPipeline;
 import com.android.systemui.statusbar.notification.collection.inflation.NotificationRowBinder;
@@ -140,6 +143,7 @@ import com.android.systemui.statusbar.notification.collection.render.Notificatio
 import com.android.systemui.statusbar.notification.headsup.HeadsUpManager;
 import com.android.systemui.statusbar.notification.interruption.VisualInterruptionDecisionProvider;
 import com.android.systemui.statusbar.notification.people.PeopleHubModule;
+import com.android.systemui.statusbar.notification.row.dagger.BundleRowComponent;
 import com.android.systemui.statusbar.notification.row.dagger.ExpandableNotificationRowComponent;
 import com.android.systemui.statusbar.notification.row.dagger.NotificationRowComponent;
 import com.android.systemui.statusbar.phone.CentralSurfaces;
@@ -153,10 +157,13 @@ import com.android.systemui.statusbar.policy.SensitiveNotificationProtectionCont
 import com.android.systemui.statusbar.policy.ZenModeController;
 import com.android.systemui.statusbar.policy.dagger.SmartRepliesInflationModule;
 import com.android.systemui.statusbar.policy.dagger.StatusBarPolicyModule;
+import com.android.systemui.statusbar.systemstatusicons.SystemStatusIconsModule;
 import com.android.systemui.statusbar.ui.binder.StatusBarViewBinderModule;
 import com.android.systemui.statusbar.window.StatusBarWindowModule;
 import com.android.systemui.telephony.data.repository.TelephonyRepositoryModule;
 import com.android.systemui.temporarydisplay.dagger.TemporaryDisplayModule;
+import com.android.systemui.topui.TopUiController;
+import com.android.systemui.topui.TopUiModule;
 import com.android.systemui.touchpad.TouchpadModule;
 import com.android.systemui.tuner.dagger.TunerModule;
 import com.android.systemui.user.UserModule;
@@ -206,6 +213,7 @@ import javax.inject.Named;
 @Module(includes = {
         ActivityManagerModule.class,
         AmbientModule.class,
+        AvControlsChipModule.class,
         AppOpsModule.class,
         AssistModule.class,
         AuthenticationModule.class,
@@ -227,6 +235,7 @@ import javax.inject.Named;
         ConnectivityModule.class,
         ControlsModule.class,
         DemoModeModule.class,
+        DesktopModule.class,
         DeviceEntryModule.class,
         DisableFlagsModule.class,
         DisplayModule.class,
@@ -238,6 +247,7 @@ import javax.inject.Named;
         FooterActionsModule.class,
         KairosCoreStartableModule.class,
         GestureModule.class,
+        GrowthModule.class,
         InputMethodModule.class,
         KeyEventRepositoryModule.class,
         KeyboardModule.class,
@@ -256,7 +266,6 @@ import javax.inject.Named;
         PolicyModule.class,
         PrivacyModule.class,
         QRCodeScannerModule.class,
-        QSFragmentStartableModule.class,
         RecordIssueModule.class,
         ReferenceModule.class,
         RetailModeModule.class,
@@ -276,12 +285,14 @@ import javax.inject.Named;
         StatusBarViewBinderModule.class,
         StatusBarWindowModule.class,
         SystemPropertiesFlagsModule.class,
+        SystemStatusIconsModule.class,
         SysUIConcurrencyModule.class,
         SysUICoroutinesModule.class,
         CommonSystemUIUnfoldModule.class,
         TelephonyRepositoryModule.class,
         TemporaryDisplayModule.class,
         ShadeDisplayAwareModule.class,
+        TopUiModule.class,
         TouchpadModule.class,
         TunerModule.class,
         UserDomainLayerModule.class,
@@ -290,7 +301,9 @@ import javax.inject.Named;
         NoteTaskModule.class,
         WalletModule.class,
         LowLightModule.class,
-        PerDisplayRepositoriesModule.class
+        LowLightClockModule.class,
+        PerDisplayRepositoriesModule.class,
+        InputDeviceModule.class,
 },
         subcomponents = {
                 ComplicationComponent.class,
@@ -300,7 +313,7 @@ import javax.inject.Named;
                 NavigationBarComponent.class,
                 NotificationRowComponent.class,
                 WindowRootViewComponent.class,
-                SystemUIDisplaySubcomponent.class,
+                BundleRowComponent.class,
         })
 public abstract class SystemUIModule {
 
@@ -408,6 +421,7 @@ public abstract class SystemUIModule {
     static Optional<BubblesManager> provideBubblesManager(Context context,
             Optional<Bubbles> bubblesOptional,
             NotificationShadeWindowController notificationShadeWindowController,
+            TopUiController topUiController,
             KeyguardStateController keyguardStateController,
             ShadeController shadeController,
             @Nullable IStatusBarService statusBarService,
@@ -428,6 +442,7 @@ public abstract class SystemUIModule {
         return Optional.ofNullable(BubblesManager.create(context,
                 bubblesOptional,
                 notificationShadeWindowController,
+                topUiController,
                 keyguardStateController,
                 shadeController,
                 statusBarService,

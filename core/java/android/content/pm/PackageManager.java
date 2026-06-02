@@ -89,6 +89,7 @@ import android.os.incremental.IncrementalManager;
 import android.os.storage.StorageManager;
 import android.os.storage.VolumeInfo;
 import android.permission.PermissionManager;
+import android.ravenwood.annotation.RavenwoodSupported.SupportType;
 import android.telephony.TelephonyManager;
 import android.telephony.UiccCardInfo;
 import android.telephony.gba.GbaService;
@@ -3354,6 +3355,16 @@ public abstract class PackageManager {
             "android.software.car.templates_host";
 
     /**
+     * Feature for {@link #getSystemAvailableFeatures} and {@link #hasSystemFeature}: The device
+     * is opted-in to render the application using Automotive App Host for Media
+     *
+     * @hide
+     */
+    @SdkConstant(SdkConstantType.FEATURE)
+    public static final String FEATURE_CAR_TEMPLATES_HOST_MEDIA =
+            "android.software.car.templates_host.media";
+
+    /**
      * Feature for {@link #getSystemAvailableFeatures} and {@link #hasSystemFeature}:If this
      * feature is supported, the device should also declare {@link #FEATURE_AUTOMOTIVE} and show
      * a UI that can display multiple tasks at the same time on a single display. The user can
@@ -3471,7 +3482,7 @@ public abstract class PackageManager {
     /**
      * Feature for {@link #getSystemAvailableFeatures} and
      * {@link #hasSystemFeature}: The device can communicate using Near-Field
-     * Communications (NFC).
+     * Communications (NFC), acting as a reader.
      */
     @SdkConstant(SdkConstantType.FEATURE)
     public static final String FEATURE_NFC = "android.hardware.nfc";
@@ -5817,6 +5828,7 @@ public abstract class PackageManager {
      * {@link Context#getPackageManager}
      */
     @Deprecated
+    @android.ravenwood.annotation.RavenwoodKeep
     public PackageManager() {}
 
     /**
@@ -7802,20 +7814,46 @@ public abstract class PackageManager {
      * Intent.resolveActivity(PackageManager)} do.
      * </p>
      *
-     * Use {@link #resolveActivityAsUser(Intent, ResolveInfoFlags, int)} when long flags are needed.
+     * Use {@link #resolveActivityAsUser(Intent, String, ResolveInfoFlags, int)}
+     * when long flags are needed.
      *
      * @param intent An intent containing all of the desired specification
      *            (action, data, type, category, and/or component).
+     * @param resolvedType A nullable resolved type for the intent's data.
+     *            Specified explicitly when the data type contained in the
+     *            intent cannot be trusted. If null is provided, the type will
+     *            be obtained from the intent using
+     *            {@link Intent#resolveTypeIfNeeded}.
      * @param flags Additional option flags to modify the data returned. The
      *            most important is {@link #MATCH_DEFAULT_ONLY}, to limit the
      *            resolution to only those activities that support the
-     *            {@link android.content.Intent#CATEGORY_DEFAULT}.
+     *            {@link Intent#CATEGORY_DEFAULT}.
      * @param userId The user id.
      * @return Returns a ResolveInfo object containing the final activity intent
      *         that was determined to be the best action. Returns null if no
      *         matching activity was found. If multiple matching activities are
      *         found and there is no default set, returns a ResolveInfo object
      *         containing something else, such as the activity resolver.
+     * @hide
+     */
+    @Nullable
+    public ResolveInfo resolveActivityAsUser(@NonNull Intent intent,
+            @Nullable String resolvedType, int flags, @UserIdInt int userId) {
+        return resolveActivityAsUser(intent, resolvedType, ResolveInfoFlags.of(flags), userId);
+    }
+
+    /**
+     * See {@link #resolveActivityAsUser(Intent, String, int, int)}.
+     * @hide
+     */
+    @Nullable
+    public ResolveInfo resolveActivityAsUser(@NonNull Intent intent,
+            @Nullable String resolvedType, @NonNull ResolveInfoFlags flags, @UserIdInt int userId) {
+        throw new UnsupportedOperationException(
+                "resolveActivityAsUser not implemented in subclass");
+    }
+     /**
+     * See {@link #resolveActivityAsUser(Intent, String, int, int)}.
      * @hide
      */
     @SuppressWarnings("HiddenAbstractMethod")
@@ -7825,7 +7863,7 @@ public abstract class PackageManager {
             int flags, @UserIdInt int userId);
 
     /**
-     * See {@link #resolveActivityAsUser(Intent, int, int)}.
+     * See {@link #resolveActivityAsUser(Intent, String, int, int)}.
      * @hide
      */
     @Nullable
@@ -8482,6 +8520,8 @@ public abstract class PackageManager {
      *             found on the system.
      */
     @NonNull
+    @android.ravenwood.annotation.RavenwoodSupported(
+            type = SupportType.SUBCLASS, subclass = "RavenwoodPackageManager")
     public abstract InstrumentationInfo getInstrumentationInfo(@NonNull ComponentName className,
             @InstrumentationInfoFlags int flags) throws NameNotFoundException;
 
@@ -9350,7 +9390,7 @@ public abstract class PackageManager {
     @SuppressWarnings("HiddenAbstractMethod")
     @SystemApi
     @RequiresPermission(Manifest.permission.INSTALL_PACKAGES)
-    public abstract void setUpdateAvailable(@NonNull String packageName, boolean updateAvaialble);
+    public abstract void setUpdateAvailable(@NonNull String packageName, boolean updateAvailable);
 
     /**
      * Attempts to delete a package. Since this may take a little while, the
@@ -11709,12 +11749,6 @@ public abstract class PackageManager {
                     return getApplicationInfoAsUserUncached(
                             query.packageName, query.flags, query.userId);
                 }
-                @Override
-                public boolean resultEquals(ApplicationInfo cached, ApplicationInfo fetched) {
-                    // Implementing this debug check for ApplicationInfo would require a
-                    // complicated deep comparison, so just bypass it for now.
-                    return true;
-                }
             };
 
     /** @hide */
@@ -11798,12 +11832,6 @@ public abstract class PackageManager {
                 public PackageInfo recompute(PackageInfoQuery query) {
                     return getPackageInfoAsUserUncached(
                             query.packageName, query.flags, query.userId);
-                }
-                @Override
-                public boolean resultEquals(PackageInfo cached, PackageInfo fetched) {
-                    // Implementing this debug check for PackageInfo would require a
-                    // complicated deep comparison, so just bypass it for now.
-                    return true;
                 }
             };
 

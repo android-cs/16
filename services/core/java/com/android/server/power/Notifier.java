@@ -63,6 +63,7 @@ import android.util.SparseArray;
 import android.util.SparseBooleanArray;
 import android.view.WindowManagerPolicyConstants;
 
+import com.android.internal.annotations.GuardedBy;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.app.IBatteryStats;
 import com.android.internal.logging.MetricsLogger;
@@ -151,6 +152,7 @@ public class Notifier {
     private final Vibrator mVibrator;
     @NonNull private final WakeLockLog mPartialWakeLockLog;
     @NonNull private final WakeLockLog mFullWakeLockLog;
+    @Nullable private final WakelockTracer mWakelockTracer;
     private final DisplayManagerInternal mDisplayManagerInternal;
 
     private final NotifierHandler mHandler;
@@ -256,6 +258,12 @@ public class Notifier {
         mFullWakeLockLog = mInjector.getWakeLockLog(context);
         mPartialWakeLockLog = mInjector.getWakeLockLog(context);
 
+        if (mFlags.isAppWakelockDataSourceEnabled()) {
+            mWakelockTracer = mInjector.getWakelockTracer(looper);
+        } else {
+            mWakelockTracer = null;
+        }
+
         // Initialize interactive state for battery stats.
         try {
             mBatteryStats.noteInteractive(true);
@@ -306,7 +314,8 @@ public class Notifier {
                     + ", ownerUid=" + ownerUid + ", ownerPid=" + ownerPid
                     + ", workSource=" + workSource);
         }
-        logWakelockStateChanged(flags, tag, ownerUid, workSource, WakelockEventType.ACQUIRE);
+        logWakelockStateChanged(flags, tag, ownerUid, ownerPid, workSource,
+                WakelockEventType.ACQUIRE);
         notifyWakeLockListener(callback, tag, true, ownerUid, ownerPid, flags, workSource,
                 packageName, historyTag);
         if (!mFlags.improveWakelockLatency()) {
@@ -411,9 +420,10 @@ public class Notifier {
                         + ", workSource=" + newWorkSource);
             }
 
-            logWakelockStateChanged(flags, tag, ownerUid, workSource, WakelockEventType.RELEASE);
-            logWakelockStateChanged(
-                    newFlags, newTag, newOwnerUid, newWorkSource, WakelockEventType.ACQUIRE);
+            logWakelockStateChanged(flags, tag, ownerUid, ownerPid, workSource,
+                    WakelockEventType.RELEASE);
+            logWakelockStateChanged(newFlags, newTag, newOwnerUid, newOwnerPid, newWorkSource,
+                    WakelockEventType.ACQUIRE);
 
             final boolean unimportantForLogging = newOwnerUid == Process.SYSTEM_UID
                     && (newFlags & PowerManager.UNIMPORTANT_FOR_LOGGING) != 0;
@@ -460,7 +470,8 @@ public class Notifier {
                     + ", ownerUid=" + ownerUid + ", ownerPid=" + ownerPid
                     + ", workSource=" + workSource);
         }
-        logWakelockStateChanged(flags, tag, ownerUid, workSource, WakelockEventType.RELEASE);
+        logWakelockStateChanged(flags, tag, ownerUid, ownerPid, workSource,
+                WakelockEventType.RELEASE);
         notifyWakeLockListener(callback, tag, false, ownerUid, ownerPid, flags, workSource,
                 packageName, historyTag);
         if (!mFlags.improveWakelockLatency()) {
@@ -1313,7 +1324,7 @@ public class Notifier {
                 mScreenTimeoutPolicyListeners.set(displayId, listenersContainer);
             }
 
-            listenersContainer.addListener(listener);
+            listenersContainer.addListenerLocked(listener);
         }
     }
 
@@ -1331,7 +1342,7 @@ public class Notifier {
                 return;
             }
 
-            listenersContainer.removeListener(listener);
+            listenersContainer.removeListenerLocked(listener);
 
             if (listenersContainer.isEmpty()) {
                 mScreenTimeoutPolicyListeners.remove(displayId);
@@ -1363,7 +1374,7 @@ public class Notifier {
                 if (mDisplayManagerInternal.getGroupIdForDisplay(displayId) == displayGroupId) {
                     final ScreenTimeoutPolicyListenersContainer container =
                             mScreenTimeoutPolicyListeners.valueAt(idx);
-                    container.updateScreenTimeoutPolicyAndNotifyIfNeeded(screenTimeoutPolicy);
+                    container.updateScreenTimeoutPolicyAndNotifyIfNeededLocked(screenTimeoutPolicy);
                 }
             }
         }
@@ -1371,23 +1382,29 @@ public class Notifier {
 
     private final class ScreenTimeoutPolicyListenersContainer {
         private final RemoteCallbackList<IScreenTimeoutPolicyListener> mListeners;
+
+        @GuardedBy("mLock")
         private final ArrayMap<IScreenTimeoutPolicyListener, Integer> mLastReportedState =
                 new ArrayMap<>();
 
+        @GuardedBy("mLock")
         @ScreenTimeoutPolicy
-        private volatile int mScreenTimeoutPolicy;
+        private int mScreenTimeoutPolicy;
 
         ScreenTimeoutPolicyListenersContainer(int screenTimeoutPolicy) {
             mScreenTimeoutPolicy = screenTimeoutPolicy;
             mListeners = new RemoteCallbackList<IScreenTimeoutPolicyListener>() {
                 @Override
                 public void onCallbackDied(IScreenTimeoutPolicyListener callbackInterface) {
-                    mLastReportedState.remove(callbackInterface);
+                    synchronized (mLock) {
+                        mLastReportedState.remove(callbackInterface);
+                    }
                 }
             };
         }
 
-        void updateScreenTimeoutPolicyAndNotifyIfNeeded(
+        @GuardedBy("mLock")
+        void updateScreenTimeoutPolicyAndNotifyIfNeededLocked(
                 @ScreenTimeoutPolicy int screenTimeoutPolicy) {
             mScreenTimeoutPolicy = screenTimeoutPolicy;
 
@@ -1400,12 +1417,14 @@ public class Notifier {
             });
         }
 
-        void addListener(IScreenTimeoutPolicyListener listener) {
+        @GuardedBy("mLock")
+        void addListenerLocked(IScreenTimeoutPolicyListener listener) {
             mListeners.register(listener);
             mHandler.post(() -> notifyListenerIfNeeded(listener));
         }
 
-        void removeListener(IScreenTimeoutPolicyListener listener) {
+        @GuardedBy("mLock")
+        void removeListenerLocked(IScreenTimeoutPolicyListener listener) {
             mListeners.unregister(listener);
             mLastReportedState.remove(listener);
         }
@@ -1415,8 +1434,12 @@ public class Notifier {
         }
 
         private void notifyListenerIfNeeded(IScreenTimeoutPolicyListener listener) {
-            final int currentScreenTimeoutPolicy = mScreenTimeoutPolicy;
-            final Integer reportedScreenTimeoutPolicy = mLastReportedState.get(listener);
+            final int currentScreenTimeoutPolicy;
+            final Integer reportedScreenTimeoutPolicy;
+            synchronized (mLock) {
+                currentScreenTimeoutPolicy = mScreenTimeoutPolicy;
+                reportedScreenTimeoutPolicy = mLastReportedState.get(listener);
+            }
             final boolean needsReporting = reportedScreenTimeoutPolicy == null
                     || !reportedScreenTimeoutPolicy.equals(currentScreenTimeoutPolicy);
 
@@ -1424,14 +1447,19 @@ public class Notifier {
 
             try {
                 listener.onScreenTimeoutPolicyChanged(currentScreenTimeoutPolicy);
-                mLastReportedState.put(listener, currentScreenTimeoutPolicy);
+
+                synchronized (mLock) {
+                    mLastReportedState.put(listener, currentScreenTimeoutPolicy);
+                }
             } catch (RemoteException e) {
                 // The RemoteCallbackList will take care of removing
                 // the dead object for us.
                 Slog.e(TAG, "Remote exception when notifying screen timeout policy change", e);
             } catch (Throwable e) {
                 Slog.e(TAG, "Exception when notifying screen timeout policy change", e);
-                removeListener(listener);
+                synchronized (mLock) {
+                    removeListenerLocked(listener);
+                }
             }
         }
     }
@@ -1484,8 +1512,15 @@ public class Notifier {
             int flags,
             String tag,
             int ownerUid,
+            int ownerPid,
             WorkSource workSource,
             WakelockEventType eventType) {
+        if (mWakelockTracer != null) {
+            boolean isAcquire = eventType == WakelockEventType.ACQUIRE;
+            mWakelockTracer.onWakelockEvent(isAcquire, tag, ownerUid, ownerPid, flags,
+                    workSource);
+        }
+
         if (mBatteryStatsInternal == null) {
             return;
         }
@@ -1530,6 +1565,11 @@ public class Notifier {
         @NonNull WakeLockLog getWakeLockLog(Context context);
 
         /**
+         * Gets the WakelockTracer object
+         */
+        @Nullable WakelockTracer getWakelockTracer(Looper looper);
+
+        /**
          * Gets the AppOpsManager system service
          */
         AppOpsManager getAppOpsManager(Context context);
@@ -1550,6 +1590,11 @@ public class Notifier {
         @Override
         public @NonNull WakeLockLog getWakeLockLog(Context context) {
             return new WakeLockLog(context);
+        }
+
+        @Override
+        public @Nullable WakelockTracer getWakelockTracer(Looper looper) {
+            return new WakelockTracer(looper);
         }
 
         @Override

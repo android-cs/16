@@ -16,6 +16,7 @@
 
 package com.android.server.accessibility;
 
+import static android.Manifest.permission.ACCESSIBILITY_MOTION_EVENT_OBSERVING;
 import static android.accessibilityservice.AccessibilityService.ACCESSIBILITY_TAKE_SCREENSHOT_REQUEST_INTERVAL_TIMES_MS;
 import static android.accessibilityservice.AccessibilityService.KEY_ACCESSIBILITY_SCREENSHOT_COLORSPACE;
 import static android.accessibilityservice.AccessibilityService.KEY_ACCESSIBILITY_SCREENSHOT_HARDWAREBUFFER;
@@ -35,6 +36,7 @@ import static android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK;
 import static android.view.accessibility.AccessibilityNodeInfo.ACTION_LONG_CLICK;
 
 import static com.android.server.pm.UserManagerService.enforceCurrentUserIfVisibleBackgroundEnabled;
+import static com.android.window.flags.Flags.scvhSurfaceControlLifetimeFix;
 
 import android.accessibilityservice.AccessibilityGestureEvent;
 import android.accessibilityservice.AccessibilityService;
@@ -420,19 +422,7 @@ abstract class AbstractAccessibilityServiceConnection extends IAccessibilityServ
         mNotificationTimeout = info.notificationTimeout;
         mIsDefault = (info.flags & DEFAULT) != 0;
         mGenericMotionEventSources = info.getMotionEventSources();
-        if (android.view.accessibility.Flags.motionEventObserving()) {
-            if (mContext.checkCallingOrSelfPermission(
-                            android.Manifest.permission.ACCESSIBILITY_MOTION_EVENT_OBSERVING)
-                    == PackageManager.PERMISSION_GRANTED) {
-                mObservedMotionEventSources = info.getObservedMotionEventSources();
-            } else {
-                Slog.e(
-                        LOG_TAG,
-                        "Observing motion events requires"
-                            + " android.Manifest.permission.ACCESSIBILITY_MOTION_EVENT_OBSERVING.");
-                mObservedMotionEventSources = 0;
-            }
-        }
+        mObservedMotionEventSources = info.getObservedMotionEventSources();
 
         if (supportsFlagForNotImportantViews(info)) {
             if ((info.flags & AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS) != 0) {
@@ -530,6 +520,13 @@ abstract class AbstractAccessibilityServiceConnection extends IAccessibilityServ
         if (!info.isWithinParcelableSize()) {
             throw new IllegalStateException(
                     "Cannot update service info: size is larger than safe parcelable limits.");
+        }
+        if (info.getObservedMotionEventSources() != 0
+                && mContext.checkCallingPermission(ACCESSIBILITY_MOTION_EVENT_OBSERVING)
+                != PackageManager.PERMISSION_GRANTED) {
+            Slog.e(LOG_TAG, "Observing motion events requires permission "
+                    + ACCESSIBILITY_MOTION_EVENT_OBSERVING);
+            info.setObservedMotionEventSources(0);
         }
         final long identity = Binder.clearCallingIdentity();
         try {
@@ -2809,7 +2806,15 @@ abstract class AbstractAccessibilityServiceConnection extends IAccessibilityServ
         try {
             mSystemSupport.attachAccessibilityOverlayToDisplay(
                     interactionId, displayId, sc, callback);
-            mOverlays.add(sc);
+            if (scvhSurfaceControlLifetimeFix()) {
+                // AccessibilityManagerService#attachAccessibilityOverlayToDisplay releases the
+                // SurfaceControl supplied to it. In order to reparent any attached overlays when
+                // the session is removed, we need a not-released SurfaceControl. For this purpose,
+                // we store a copy of the provided SurfaceControl in mOverlays.
+                mOverlays.add(new SurfaceControl(sc, "attachAccessibilityOverlayToDisplay"));
+            } else {
+                mOverlays.add(sc);
+            }
         } finally {
             Binder.restoreCallingIdentity(identity);
         }
@@ -2854,6 +2859,7 @@ abstract class AbstractAccessibilityServiceConnection extends IAccessibilityServ
         for (SurfaceControl sc : mOverlays) {
             if (sc.isValid()) {
                 t.reparent(sc, null);
+                sc.release();
             }
         }
         t.apply();

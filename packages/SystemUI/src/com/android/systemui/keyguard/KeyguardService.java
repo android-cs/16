@@ -66,7 +66,6 @@ import android.window.RemoteTransitionStub;
 import android.window.TransitionInfo;
 
 import com.android.internal.annotations.GuardedBy;
-import com.android.internal.foldables.FoldGracePeriodProvider;
 import com.android.internal.policy.IKeyguardDismissCallback;
 import com.android.internal.policy.IKeyguardDrawnCallback;
 import com.android.internal.policy.IKeyguardExitCallback;
@@ -115,6 +114,7 @@ import javax.inject.Inject;
 
 public class KeyguardService extends Service {
     static final String TAG = "KeyguardService";
+    static final String SCREEN_LOCK_BY_WATCH = "screen_lock_by_watch";
     static final String PERMISSION = android.Manifest.permission.CONTROL_KEYGUARD;
 
     private final FeatureFlags mFlags;
@@ -325,14 +325,9 @@ public class KeyguardService extends Service {
     private final KeyguardEnabledInteractor mKeyguardEnabledInteractor;
     private final KeyguardWakeDirectlyToGoneInteractor mKeyguardWakeDirectlyToGoneInteractor;
     private final KeyguardDismissInteractor mKeyguardDismissInteractor;
-    private final Lazy<FoldGracePeriodProvider> mFoldGracePeriodProvider = new Lazy<>() {
-        @Override
-        public FoldGracePeriodProvider get() {
-            return new FoldGracePeriodProvider();
-        }
-    };
     private final KeyguardServiceShowLockscreenInteractor mKeyguardServiceShowLockscreenInteractor;
     private final KeyguardUpdateMonitor mKeyguardUpdateMonitor;
+    private final ActivityManager mActivityManager;
 
     @Inject
     public KeyguardService(
@@ -359,7 +354,8 @@ public class KeyguardService extends Service {
             Lazy<DeviceEntryInteractor> deviceEntryInteractorLazy,
             KeyguardStateCallbackInteractor keyguardStateCallbackInteractor,
             KeyguardServiceShowLockscreenInteractor keyguardServiceShowLockscreenInteractor,
-            KeyguardUpdateMonitor keyguardUpdateMonitor) {
+            KeyguardUpdateMonitor keyguardUpdateMonitor,
+            ActivityManager activityManager) {
         super();
         mKeyguardViewMediator = keyguardViewMediator;
         mKeyguardLifecyclesDispatcher = keyguardLifecyclesDispatcher;
@@ -393,41 +389,12 @@ public class KeyguardService extends Service {
         mKeyguardDismissInteractor = keyguardDismissInteractor;
         mKeyguardServiceShowLockscreenInteractor = keyguardServiceShowLockscreenInteractor;
         mKeyguardUpdateMonitor = keyguardUpdateMonitor;
+        mActivityManager = activityManager;
     }
 
     @Override
     public void onCreate() {
         ((SystemUIApplication) getApplication()).startSystemUserServicesIfNeeded();
-
-        if (mShellTransitions == null || !Transitions.ENABLE_SHELL_TRANSITIONS) {
-            RemoteAnimationDefinition definition = new RemoteAnimationDefinition();
-            final RemoteAnimationAdapter exitAnimationAdapter =
-                    new RemoteAnimationAdapter(
-                            mKeyguardViewMediator.getExitAnimationRunner(), 0, 0);
-            definition.addRemoteAnimation(TRANSIT_OLD_KEYGUARD_GOING_AWAY,
-                    exitAnimationAdapter);
-            definition.addRemoteAnimation(TRANSIT_OLD_KEYGUARD_GOING_AWAY_ON_WALLPAPER,
-                    exitAnimationAdapter);
-            final RemoteAnimationAdapter occludeAnimationAdapter =
-                    new RemoteAnimationAdapter(
-                            mKeyguardViewMediator.getOccludeAnimationRunner(), 0, 0);
-            definition.addRemoteAnimation(TRANSIT_OLD_KEYGUARD_OCCLUDE,
-                    occludeAnimationAdapter);
-
-            final RemoteAnimationAdapter occludeByDreamAnimationAdapter =
-                    new RemoteAnimationAdapter(
-                            mKeyguardViewMediator.getOccludeByDreamAnimationRunner(), 0, 0);
-            definition.addRemoteAnimation(TRANSIT_OLD_KEYGUARD_OCCLUDE_BY_DREAM,
-                    occludeByDreamAnimationAdapter);
-
-            final RemoteAnimationAdapter unoccludeAnimationAdapter =
-                    new RemoteAnimationAdapter(
-                            mKeyguardViewMediator.getUnoccludeAnimationRunner(), 0, 0);
-            definition.addRemoteAnimation(TRANSIT_OLD_KEYGUARD_UNOCCLUDE,
-                    unoccludeAnimationAdapter);
-            ActivityTaskManager.getInstance().registerRemoteAnimationsForDisplay(
-                    mDisplayTracker.getDefaultDisplayId(), definition);
-        }
     }
 
     @Override
@@ -672,9 +639,14 @@ public class KeyguardService extends Service {
 
             if (SceneContainerFlag.isEnabled()) {
                 mDeviceEntryInteractorLazy.get().lockNow("doKeyguardTimeout");
-            } else if (KeyguardWmStateRefactor.isEnabled()) {
+            }
+            if (KeyguardWmStateRefactor.isEnabled()) {
                 mKeyguardServiceShowLockscreenInteractor
                         .onKeyguardServiceDoKeyguardTimeout(options);
+            }
+
+            if (options != null && options.getBoolean(SCREEN_LOCK_BY_WATCH)) {
+                mKeyguardInteractor.notifyWatchDisconnected();
             }
 
             mKeyguardViewMediator.doKeyguardTimeout(options);
@@ -684,17 +656,19 @@ public class KeyguardService extends Service {
         public void showDismissibleKeyguard() {
             trace("showDismissibleKeyguard");
             checkPermission();
-            if (mFoldGracePeriodProvider.get().isEnabled()) {
-                mKeyguardInteractor.showDismissibleKeyguard();
+
+            if (mActivityManager.getLockTaskModeState() != ActivityManager.LOCK_TASK_MODE_NONE) {
+                return;
             }
 
+            mKeyguardInteractor.showDismissibleKeyguard();
             if (KeyguardWmStateRefactor.isEnabled()) {
                 mKeyguardServiceShowLockscreenInteractor.onKeyguardServiceShowDismissibleKeyguard();
             } else {
                 mKeyguardViewMediator.showDismissibleKeyguard();
             }
 
-            if (SceneContainerFlag.isEnabled() && mFoldGracePeriodProvider.get().isEnabled()) {
+            if (SceneContainerFlag.isEnabled()) {
                 mMainExecutor.execute(() -> mSceneInteractorLazy.get().changeScene(
                         Scenes.Lockscreen, "KeyguardService.showDismissibleKeyguard"));
             }
