@@ -123,6 +123,7 @@ import com.android.systemui.keyguard.ui.viewmodel.KeyguardTouchHandlingViewModel
 import com.android.systemui.media.controls.domain.pipeline.MediaDataManager;
 import com.android.systemui.media.controls.ui.controller.KeyguardMediaController;
 import com.android.systemui.media.controls.ui.controller.MediaHierarchyManager;
+import com.android.systemui.media.remedia.shared.flag.MediaControlsInComposeFlag;
 import com.android.systemui.model.StateChange;
 import com.android.systemui.model.SysUiState;
 import com.android.systemui.navigationbar.NavigationBarController;
@@ -198,7 +199,6 @@ import com.android.systemui.statusbar.policy.SplitShadeStateController;
 import com.android.systemui.unfold.SysUIUnfoldComponent;
 import com.android.systemui.util.Utils;
 import com.android.systemui.util.time.SystemClock;
-import com.android.systemui.wallpapers.ui.viewmodel.WallpaperFocalAreaViewModel;
 import com.android.systemui.window.domain.interactor.WindowRootViewBlurInteractor;
 import com.android.wm.shell.animation.FlingAnimationUtils;
 
@@ -503,7 +503,6 @@ public final class NotificationPanelViewController implements
     private final NotificationListContainer mNotificationListContainer;
     private final NPVCDownEventState.Buffer mLastDownEvents;
     private final KeyguardClockInteractor mKeyguardClockInteractor;
-    private final WallpaperFocalAreaViewModel mWallpaperFocalAreaViewModel;
     private float mMinExpandHeight;
     private boolean mPanelUpdateWhenAnimatorEnds;
     private boolean mHasVibratedOnOpen = false;
@@ -637,7 +636,6 @@ public final class NotificationPanelViewController implements
             KeyguardTransitionInteractor keyguardTransitionInteractor,
             DumpManager dumpManager,
             KeyguardTouchHandlingViewModel.Factory keyguardTouchHandlingViewModelFactory,
-            WallpaperFocalAreaViewModel wallpaperFocalAreaViewModel,
             KeyguardInteractor keyguardInteractor,
             ActivityStarter activityStarter,
             SharedNotificationContainerInteractor sharedNotificationContainerInteractor,
@@ -800,7 +798,6 @@ public final class NotificationPanelViewController implements
                 SysUIUnfoldComponent::getKeyguardUnfoldTransition);
 
         mKeyguardClockInteractor = keyguardClockInteractor;
-        mWallpaperFocalAreaViewModel = wallpaperFocalAreaViewModel;
         KeyguardTouchViewBinder.bind(
                 mView.requireViewById(R.id.keyguard_long_press),
                 keyguardTouchHandlingViewModelFactory,
@@ -1029,8 +1026,10 @@ public final class NotificationPanelViewController implements
             mQsController.updateResources();
             mNotificationsQSContainerController.updateResources();
             updateKeyguardStatusViewAlignment();
-            mKeyguardMediaController.refreshMediaPosition(
-                    "NotificationPanelViewController.updateResources");
+            if (!SceneContainerFlag.isEnabled()) {
+                mKeyguardMediaController.refreshMediaPosition(
+                        "NotificationPanelViewController.updateResources");
+            }
 
             if (splitShadeChanged) {
                 if (isPanelVisibleBecauseOfHeadsUp()) {
@@ -1884,7 +1883,7 @@ public final class NotificationPanelViewController implements
                 || expandedHeight > mHeadsUpStartHeight);
         if (goingBetweenClosedShadeAndExpandedQs && qsShouldExpandWithHeadsUp) {
             float qsExpansionFraction;
-            if (mSplitShadeEnabled && !Flags.bouncerUiRevamp()) {
+            if (mSplitShadeEnabled) {
                 qsExpansionFraction = 1;
             } else if (isKeyguardShowing()) {
                 // On Keyguard, interpolate the QS expansion linearly to the panel expansion
@@ -2265,7 +2264,9 @@ public final class NotificationPanelViewController implements
             mOpenCloseListener.onClosingFinished();
         }
         setClosingWithAlphaFadeout(false);
-        mMediaHierarchyManager.closeGuts();
+        if (!MediaControlsInComposeFlag.isEnabled()) {
+            mMediaHierarchyManager.closeGuts();
+        }
     }
 
     private void setClosingWithAlphaFadeout(boolean closing) {
@@ -3974,8 +3975,13 @@ public final class NotificationPanelViewController implements
         @Override
         public boolean onTouchEvent(MotionEvent event) {
             if (!mUseExternalTouch) {
-                mShadeLog.d("onTouch: external touch handling disabled");
-                return false;
+                if (isLockedShadeHomeGestureEvent(event)) {
+                    mShadeLog.d("onTouch: down motion event in home gesture area");
+                } else {
+                    mShadeLog.d("onTouch: external touch handling disabled");
+                    // Consume touches below notifications on keyguard to allow for expansion
+                    return mStatusBarStateController.getState() == StatusBarState.KEYGUARD;
+                }
             }
 
             if (mAlternateBouncerInteractor.isVisibleState()) {
@@ -4071,6 +4077,11 @@ public final class NotificationPanelViewController implements
 
             handled |= handleTouch(event);
             return !mDozing || handled;
+        }
+
+        private boolean isLockedShadeHomeGestureEvent(MotionEvent event) {
+            return mBarState == SHADE_LOCKED && event.getActionMasked() == MotionEvent.ACTION_DOWN
+                    && isInGestureNavHomeHandleArea(event.getY());
         }
 
         private boolean handleTouch(MotionEvent event) {

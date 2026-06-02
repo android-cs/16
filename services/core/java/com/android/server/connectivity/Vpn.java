@@ -602,6 +602,16 @@ public class Vpn {
             }
         }
 
+        /** Verify the binder calling UID is the one passed in arguments or the SYSTEM_UID */
+        public void verifyCallingUidOrSystemUidAndPackage(
+                Context context, String packageName, int userId) {
+            final int callingUid = Binder.getCallingUid();
+            if (getAppUid(context, packageName, userId) != callingUid
+                    && callingUid != Process.SYSTEM_UID) {
+                throw new SecurityException(packageName + " does not belong to uid " + callingUid);
+            }
+        }
+
         /**
          * @see VpnConnectivityMetrics.
          *
@@ -731,6 +741,9 @@ public class Vpn {
             case CONNECTED:
                 if (null != mNetworkAgent) {
                     mNetworkAgent.markConnected();
+                    if (mVpnConnectivityMetrics != null) {
+                        mVpnConnectivityMetrics.notifyVpnConnected();
+                    }
                 }
                 break;
             case DISCONNECTED:
@@ -738,6 +751,11 @@ public class Vpn {
                 if (null != mNetworkAgent) {
                     mNetworkAgent.unregister();
                     mNetworkAgent = null;
+                    if (mVpnConnectivityMetrics != null) {
+                        mVpnConnectivityMetrics.notifyVpnDisconnected();
+                        // Clear the metrics since the NetworkAgent is disconnected.
+                        mVpnConnectivityMetrics.resetMetrics();
+                    }
                 }
                 break;
             case CONNECTING:
@@ -1300,8 +1318,12 @@ public class Vpn {
         // We can't just check that packageName matches mPackage, because if the app was uninstalled
         // and reinstalled it will no longer be prepared. Similarly if there is a shared UID, the
         // calling package may not be the same as the prepared package. Check both UID and package.
-        return getAppUid(mContext, packageName, mUserId) == mOwnerUID
-                && mPackage.equals(packageName);
+        return isCurrentPreparedPackage(packageName, getAppUid(mContext, packageName, mUserId));
+    }
+
+    @GuardedBy("this")
+    private boolean isCurrentPreparedPackage(String packageName, int uid) {
+        return uid == mOwnerUID && mPackage.equals(packageName);
     }
 
     /** Prepare the VPN for the given package. Does not perform permission checks. */
@@ -1806,6 +1828,10 @@ public class Vpn {
             config.interfaze = mInterface;
             config.startTime = SystemClock.elapsedRealtime();
             mConfig = config;
+            // Log VPN service events for connection establishment
+            if (mVpnConnectivityMetrics != null) {
+                mVpnConnectivityMetrics.setVpnType(VpnManager.TYPE_VPN_SERVICE);
+            }
 
             // Set up forwarding and DNS rules.
             // First attempt to do a seamless handover that only changes the interface name and
@@ -2289,7 +2315,7 @@ public class Vpn {
         return success;
     }
 
-    private void setMtu(int mtu) {
+    private void setMtuAndMetrics(int mtu) {
         synchronized (Vpn.this) {
             mConfig.mtu = mtu;
             if (mVpnConnectivityMetrics != null) {
@@ -2302,7 +2328,7 @@ public class Vpn {
         synchronized (Vpn.this) {
             mConfig.underlyingNetworks = networks;
             if (mVpnConnectivityMetrics != null) {
-                mVpnConnectivityMetrics.setUnderlyingNetwork(mConfig.underlyingNetworks);
+                mVpnConnectivityMetrics.updateUnderlyingNetworkTypes(mConfig.underlyingNetworks);
             }
         }
     }
@@ -2993,7 +3019,8 @@ public class Vpn {
             // in onChildMigrated
             mIkeConnectionInfo = ikeConnectionInfo;
             if (mVpnConnectivityMetrics != null) {
-                mVpnConnectivityMetrics.setServerIpProtocol(ikeConnectionInfo.getRemoteAddress());
+                mVpnConnectivityMetrics.updateServerIpProtocol(
+                        ikeConnectionInfo.getRemoteAddress());
             }
         }
 
@@ -3058,14 +3085,21 @@ public class Vpn {
                     // Ignore stale runner.
                     if (mVpnRunner != this) return;
 
+                    if (mVpnConnectivityMetrics != null) {
+                        mVpnConnectivityMetrics.setVpnType(VpnManager.TYPE_VPN_PLATFORM);
+                        mVpnConnectivityMetrics.setVpnProfileType(mProfile.toVpnProfile().type);
+                        mVpnConnectivityMetrics.setAllowedAlgorithms(
+                                mProfile.getAllowedAlgorithms());
+                    }
+
                     mInterface = interfaceName;
-                    setMtu(vpnMtu);
+                    setMtuAndMetrics(vpnMtu);
                     mConfig.interfaze = mInterface;
 
                     mConfig.addresses.clear();
                     mConfig.addresses.addAll(internalAddresses);
                     if (mVpnConnectivityMetrics != null) {
-                        mVpnConnectivityMetrics.setVpnNetworkIpProtocol(mConfig.addresses);
+                        mVpnConnectivityMetrics.updateVpnNetworkIpProtocol(mConfig.addresses);
                     }
 
                     mConfig.routes.clear();
@@ -3169,7 +3203,7 @@ public class Vpn {
                     final LinkProperties oldLp = makeLinkProperties();
 
                     setUnderlyingNetworksAndMetrics(new Network[] {network});
-                    setMtu(calculateVpnMtu());
+                    setMtuAndMetrics(calculateVpnMtu());
                     final LinkProperties newLp = makeLinkProperties();
 
                     // If MTU is < 1280, IPv6 addresses will be removed. If there are no addresses
@@ -4071,6 +4105,10 @@ public class Vpn {
         mDeps.verifyCallingUidAndPackage(mContext, packageName, mUserId);
     }
 
+    private void verifyCallingUidOrSystemUidAndPackage(String packageName) {
+        mDeps.verifyCallingUidOrSystemUidAndPackage(mContext, packageName, mUserId);
+    }
+
     @VisibleForTesting
     String getProfileNameForPackage(String packageName) {
         return Credentials.PLATFORM_VPN + mUserId + "_" + packageName;
@@ -4139,6 +4177,10 @@ public class Vpn {
         return isCurrentPreparedPackage(packageName) && isIkev2VpnRunner();
     }
 
+    private boolean isCurrentIkev2VpnLocked(@NonNull String packageName, int uid) {
+        return isCurrentPreparedPackage(packageName, uid) && isIkev2VpnRunner();
+    }
+
     /**
      * Deletes an app-provisioned VPN profile.
      *
@@ -4162,6 +4204,32 @@ public class Vpn {
                 } else {
                     prepareInternal(VpnConfig.LEGACY_VPN);
                 }
+            }
+
+            getVpnProfileStore().remove(getProfileNameForPackage(packageName));
+        } finally {
+            Binder.restoreCallingIdentity(token);
+        }
+    }
+
+    /**
+     * Deletes an app-provisioned VPN profile because the provisioning app has been uninstalled.
+     *
+     * @param packageName the package name of the app provisioning this profile
+     * @param uid the uid of the app provisioning this profile
+     */
+    public synchronized void deleteVpnProfileDueToAppRemoval(
+            @NonNull String packageName, int uid) {
+        requireNonNull(packageName, "No package name provided");
+
+        verifyCallingUidOrSystemUidAndPackage(packageName);
+        enforceNotRestrictedUser();
+
+        final long token = Binder.clearCallingIdentity();
+        try {
+            // If this profile is providing the current VPN, turn it off.
+            if (isCurrentIkev2VpnLocked(packageName, uid)) {
+                prepareInternal(VpnConfig.LEGACY_VPN);
             }
 
             getVpnProfileStore().remove(getProfileNameForPackage(packageName));
@@ -4274,11 +4342,6 @@ public class Vpn {
             config.allowBypass = profile.isBypassable;
             config.disallowedApplications = getAppExclusionList(mPackage);
             mConfig = config;
-            if (mVpnConnectivityMetrics != null) {
-                mVpnConnectivityMetrics.setVpnType(VpnManager.TYPE_VPN_PLATFORM);
-                mVpnConnectivityMetrics.setVpnProfileType(profile.type);
-                mVpnConnectivityMetrics.setAllowedAlgorithms(profile.getAllowedAlgorithms());
-            }
 
             switch (profile.type) {
                 case VpnProfile.TYPE_IKEV2_IPSEC_USER_PASS:
@@ -4710,6 +4773,11 @@ public class Vpn {
             pw.increaseIndent();
             mEventChanges.reverseDump(pw);
             pw.decreaseIndent();
+
+            if (mVpnConnectivityMetrics != null) {
+                pw.println();
+                mVpnConnectivityMetrics.dump(pw);
+            }
         }
     }
 

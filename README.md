@@ -1,10 +1,10 @@
-# android-16.0.0_r3
+# android-16.0.0_r4
 
 1.1G
 
-Java files: 17603
-AIDL files: 2409
+Java files: 17868
+AIDL files: 2471
 
-https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-16.0.0_r3
+https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-16.0.0_r4
 
-https://cs.android.com/android/platform/superproject/+/android-16.0.0_r3:frameworks/base/
+https://cs.android.com/android/platform/superproject/+/android-16.0.0_r4:frameworks/base/

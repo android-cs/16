@@ -189,8 +189,8 @@ class DragDropController {
                         return null;
                     }
 
-                    final WindowState callingWin = mService.windowForClientLocked(
-                            null, window, false);
+                    final WindowState callingWin = mService.windowForClient(
+                            null /* session */, window);
                     if (callingWin == null || !callingWin.canReceiveTouchInput()) {
                         Slog.w(TAG_WM, "Bad requesting window " + window);
                         return null;  // !!! TODO: throw here?
@@ -343,7 +343,8 @@ class DragDropController {
                 // lookup fails.
                 mHandler.removeMessages(MSG_DRAG_END_TIMEOUT, window.asBinder());
 
-                WindowState callingWin = mService.windowForClientLocked(null, window, false);
+                final WindowState callingWin = mService.windowForClient(
+                        null /* session */, window);
                 if (callingWin == null) {
                     Slog.w(TAG_WM, "Bad result-reporting window " + window);
                     return;  // !!! TODO: throw here?
@@ -364,8 +365,7 @@ class DragDropController {
                 mDragState.endDragLocked(consumed, relinquishDragSurfaceToDropTarget);
 
                 final Task droppedWindowTask = callingWin.getTask();
-                if (com.android.window.flags.Flags.delegateUnhandledDrags()
-                        && mGlobalDragListener != null && droppedWindowTask != null && consumed
+                if (mGlobalDragListener != null && droppedWindowTask != null && consumed
                         && isCrossWindowDrag) {
                     try {
                         mGlobalDragListener.onCrossWindowDrop(droppedWindowTask.getTaskInfo());
@@ -407,8 +407,7 @@ class DragDropController {
                 (mDragState.mFlags & (DRAG_FLAG_GLOBAL_SAME_APPLICATION | DRAG_FLAG_GLOBAL)) == 0;
         final boolean shouldDelegateUnhandledDrag =
                 (mDragState.mFlags & DRAG_FLAG_START_INTENT_SENDER_ON_UNHANDLED_DRAG) != 0;
-        if (!com.android.window.flags.Flags.delegateUnhandledDrags()
-                || mGlobalDragListener == null
+        if (mGlobalDragListener == null
                 || !shouldDelegateUnhandledDrag
                 || isLocalDrag) {
             // Skip if the flag is disabled, there is no unhandled-drag listener, or if this is a
@@ -584,8 +583,8 @@ class DragDropController {
                 return false;
             }
             if (mDragState.isAccessibilityDragDrop() && isA11yEnabled) {
-                final WindowState winState = mService.windowForClientLocked(
-                        null, window, false);
+                final WindowState winState = mService.windowForClient(
+                        null /* session */, window);
                 if (!mDragState.isWindowNotified(winState)) {
                     return false;
                 }

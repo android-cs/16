@@ -19,18 +19,17 @@ package com.android.systemui.statusbar.pipeline.mobile.ui.binder
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
-import com.android.systemui.Flags
 import com.android.systemui.kairos.ExperimentalKairosApi
 import com.android.systemui.kairos.KairosNetwork
 import com.android.systemui.lifecycle.rememberViewModel
 import com.android.systemui.lifecycle.repeatWhenAttached
+import com.android.systemui.scene.shared.flag.SceneContainerFlag
+import com.android.systemui.statusbar.pipeline.mobile.StatusBarMobileIconKairos
 import com.android.systemui.statusbar.pipeline.mobile.ui.viewmodel.MobileIconsViewModel
 import com.android.systemui.statusbar.pipeline.mobile.ui.viewmodel.StackedMobileIconViewModel
 import com.android.systemui.statusbar.pipeline.mobile.ui.viewmodel.StackedMobileIconViewModelImpl
@@ -57,11 +56,15 @@ object StackedMobileIconBinder {
                 repeatOnLifecycle(Lifecycle.State.STARTED) {
                     view.composeView.apply {
                         setViewCompositionStrategy(
-                            ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed
+                            if (SceneContainerFlag.isEnabled) {
+                                ViewCompositionStrategy.Default
+                            } else {
+                                ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed
+                            }
                         )
                         setContent {
                             val viewModel: StackedMobileIconViewModel =
-                                if (Flags.statusBarMobileIconKairos()) {
+                                if (StatusBarMobileIconKairos.isEnabled) {
                                     rememberKairosActivatable(
                                         "StackedMobileIconBinder",
                                         kairosNetwork,
@@ -76,10 +79,7 @@ object StackedMobileIconBinder {
                             val tint by tintFlow.collectAsStateWithLifecycle()
                             if (viewModel.isIconVisible) {
                                 CompositionLocalProvider(LocalContentColor provides Color(tint)) {
-                                    StackedMobileIcon(
-                                        viewModel,
-                                        modifier = Modifier.onSizeChanged { view.requestLayout() },
-                                    )
+                                    StackedMobileIcon(viewModel)
                                 }
                             }
                         }

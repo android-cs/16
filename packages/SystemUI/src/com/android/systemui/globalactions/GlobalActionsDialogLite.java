@@ -50,6 +50,7 @@ import android.content.res.Configuration;
 import android.content.res.Resources;
 import android.database.ContentObserver;
 import android.graphics.Color;
+import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.media.AudioManager;
 import android.os.Binder;
@@ -115,6 +116,8 @@ import com.android.internal.util.EmergencyAffordanceManager;
 import com.android.internal.util.ScreenshotHelper;
 import com.android.internal.widget.LockPatternUtils;
 import com.android.keyguard.KeyguardUpdateMonitor;
+import com.android.systemui.Flags;
+import com.android.systemui.FontStyles;
 import com.android.systemui.MultiListLayout;
 import com.android.systemui.MultiListLayout.MultiListAdapter;
 import com.android.systemui.animation.DialogCuj;
@@ -136,8 +139,6 @@ import com.android.systemui.settings.UserTracker;
 import com.android.systemui.shade.ShadeController;
 import com.android.systemui.shade.ShadeDisplayAware;
 import com.android.systemui.shade.shared.flag.ShadeWindowGoesAround;
-import com.android.systemui.statusbar.NotificationShadeWindowController;
-import com.android.systemui.topui.TopUiController;
 import com.android.systemui.statusbar.VibratorHelper;
 import com.android.systemui.statusbar.phone.LightBarController;
 import com.android.systemui.statusbar.phone.SystemUIDialog;
@@ -146,7 +147,7 @@ import com.android.systemui.statusbar.policy.KeyguardStateController;
 import com.android.systemui.statusbar.window.StatusBarWindowController;
 import com.android.systemui.statusbar.window.StatusBarWindowControllerStore;
 import com.android.systemui.telephony.TelephonyListenerManager;
-import com.android.systemui.topui.TopUiControllerRefactor;
+import com.android.systemui.topui.TopUiController;
 import com.android.systemui.user.domain.interactor.SelectedUserInteractor;
 import com.android.systemui.user.domain.interactor.UserLogoutInteractor;
 import com.android.systemui.util.EmergencyDialerConstants;
@@ -194,6 +195,7 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
     private static final String GLOBAL_ACTION_KEY_USERS = "users";
     private static final String GLOBAL_ACTION_KEY_SETTINGS = "settings";
     static final String GLOBAL_ACTION_KEY_LOCKDOWN = "lockdown";
+    static final String GLOBAL_ACTION_KEY_LOCK = "lock";
     private static final String GLOBAL_ACTION_KEY_VOICEASSIST = "voiceassist";
     private static final String GLOBAL_ACTION_KEY_ASSIST = "assist";
     static final String GLOBAL_ACTION_KEY_RESTART = "restart";
@@ -255,7 +257,7 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
     private boolean mDeviceProvisioned = false;
     private ToggleState mAirplaneState = ToggleState.Off;
     private boolean mIsWaitingForEcmExit = false;
-    private boolean mHasTelephony;
+    private boolean mHasTelephonyCalling;
     private boolean mHasVibrator;
     private final boolean mShowSilentToggle;
     private final boolean mIsTv;
@@ -264,7 +266,6 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
     private final SysuiColorExtractor mSysuiColorExtractor;
     private final IStatusBarService mStatusBarService;
     protected final LightBarController mLightBarController;
-    protected final NotificationShadeWindowController mNotificationShadeWindowController;
     protected final TopUiController mTopUiController;
     private final StatusBarWindowControllerStore mStatusBarWindowControllerStore;
     private final IWindowManager mIWindowManager;
@@ -359,7 +360,10 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
         GA_CLOSE_TIMEOUT(2148),
 
         @UiEvent(doc = "The global actions standby button was pressed.")
-        GA_STANDBY_PRESS(2210);
+        GA_STANDBY_PRESS(2210),
+
+        @UiEvent(doc = "The global actions lock button was pressed.")
+        GA_LOCK_PRESS(2402);
 
         private final int mId;
 
@@ -400,7 +404,6 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
             SysuiColorExtractor colorExtractor,
             IStatusBarService statusBarService,
             LightBarController lightBarController,
-            NotificationShadeWindowController notificationShadeWindowController,
             TopUiController topUiController,
             StatusBarWindowControllerStore statusBarWindowControllerStore,
             IWindowManager iWindowManager,
@@ -439,7 +442,6 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
         mSysuiColorExtractor = colorExtractor;
         mStatusBarService = statusBarService;
         mLightBarController = lightBarController;
-        mNotificationShadeWindowController = notificationShadeWindowController;
         mTopUiController = topUiController;
         mStatusBarWindowControllerStore = statusBarWindowControllerStore;
         mIWindowManager = iWindowManager;
@@ -490,7 +492,8 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
         filter.addAction(TelephonyManager.ACTION_EMERGENCY_CALLBACK_MODE_CHANGED);
         mBroadcastDispatcher.registerReceiver(mBroadcastReceiver, filter);
 
-        mHasTelephony = packageManager.hasSystemFeature(PackageManager.FEATURE_TELEPHONY);
+        mHasTelephonyCalling = packageManager.hasSystemFeature(
+                PackageManager.FEATURE_TELEPHONY_CALLING);
         mIsTv = packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK);
 
         // get notified of phone state changes
@@ -713,6 +716,8 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
                 if (shouldDisplayLockdown(currentUser.get())) {
                     addIfShouldShowAction(tempActions, new LockDownAction());
                 }
+            } else if (GLOBAL_ACTION_KEY_LOCK.equals(actionKey)) {
+                addIfShouldShowAction(tempActions, new LockAction());
             } else if (GLOBAL_ACTION_KEY_VOICEASSIST.equals(actionKey)) {
                 addIfShouldShowAction(tempActions, getVoiceAssistAction());
             } else if (GLOBAL_ACTION_KEY_ASSIST.equals(actionKey)) {
@@ -821,7 +826,6 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
                 mStatusBarService,
                 mLightBarController,
                 mKeyguardStateController,
-                mNotificationShadeWindowController,
                 mTopUiController,
                 mStatusBarWindowControllerStore.forDisplay(context.getDisplayId()),
                 this::onRefresh,
@@ -874,8 +878,8 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
 
     @VisibleForTesting
     boolean shouldDisplayEmergency() {
-        // Emergency calling requires a telephony radio.
-        return mHasTelephony;
+        // Emergency calling requires a telephony radio with voice calling capabilities.
+        return mHasTelephonyCalling;
     }
 
     @VisibleForTesting
@@ -938,7 +942,7 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
     @VisibleForTesting
     final class ShutDownAction extends SinglePressAction implements LongPressAction {
         ShutDownAction() {
-            super(R.drawable.ic_lock_power_off,
+            super(com.android.systemui.res.R.drawable.ic_global_actions_power_off,
                     R.string.global_action_power_off);
         }
 
@@ -950,7 +954,8 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
                 return false;
             }
             mUiEventLogger.log(GlobalActionsEvent.GA_SHUTDOWN_LONG_PRESS);
-            if (!mUserManager.hasUserRestriction(UserManager.DISALLOW_SAFE_BOOT)) {
+            if (!mUserManager.hasUserRestriction(UserManager.DISALLOW_SAFE_BOOT,
+                    getCurrentUser().getUserHandle())) {
                 mWindowManagerFuncs.reboot(true);
                 return true;
             }
@@ -1020,9 +1025,7 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
     }
 
     protected int getEmergencyTextColor(Context context) {
-        return context.getResources().getColor(
-                QsInCompose.isEnabled() ? R.color.materialColorOnSurface
-                        : com.android.systemui.res.R.color.global_actions_lite_text);
+        return context.getResources().getColor(R.color.materialColorOnSurface);
     }
 
     protected int getEmergencyIconColor(Context context) {
@@ -1053,7 +1056,7 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
     @VisibleForTesting
     class EmergencyDialerAction extends EmergencyAction {
         private EmergencyDialerAction() {
-            super(com.android.systemui.res.R.drawable.ic_emergency_star,
+            super(com.android.systemui.res.R.drawable.ic_global_actions_emergency,
                     R.string.global_action_emergency);
         }
 
@@ -1084,7 +1087,8 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
     @VisibleForTesting
     final class RestartAction extends SinglePressAction implements LongPressAction {
         RestartAction() {
-            super(R.drawable.ic_restart, R.string.global_action_restart);
+            super(com.android.systemui.res.R.drawable.ic_global_actions_restart,
+                    R.string.global_action_restart);
         }
 
         @Override
@@ -1095,7 +1099,8 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
                 return false;
             }
             mUiEventLogger.log(GlobalActionsEvent.GA_REBOOT_LONG_PRESS);
-            if (!mUserManager.hasUserRestriction(UserManager.DISALLOW_SAFE_BOOT)) {
+            if (!mUserManager.hasUserRestriction(UserManager.DISALLOW_SAFE_BOOT,
+                    getCurrentUser().getUserHandle())) {
                 mWindowManagerFuncs.reboot(true);
                 return true;
             }
@@ -1127,7 +1132,8 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
     @VisibleForTesting
     class ScreenshotAction extends SinglePressAction {
         ScreenshotAction() {
-            super(R.drawable.ic_screenshot, R.string.global_action_screenshot);
+            super(com.android.systemui.res.R.drawable.ic_global_actions_screenshot,
+                    R.string.global_action_screenshot);
         }
 
         @Override
@@ -1178,7 +1184,8 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
     class BugReportAction extends SinglePressAction implements LongPressAction {
 
         BugReportAction() {
-            super(R.drawable.ic_lock_bugreport, R.string.bugreport_title);
+            super(com.android.systemui.res.R.drawable.ic_global_actions_bugreport,
+                    R.string.bugreport_title);
         }
 
         @Override
@@ -1253,7 +1260,8 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
 
     private final class LogoutAction extends SinglePressAction {
         private LogoutAction() {
-            super(R.drawable.ic_logout, R.string.global_action_logout);
+            super(com.android.systemui.res.R.drawable.ic_global_actions_logout,
+                    R.string.global_action_logout);
         }
 
         @Override
@@ -1410,7 +1418,8 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
     @VisibleForTesting
     class LockDownAction extends SinglePressAction {
         LockDownAction() {
-            super(R.drawable.ic_lock_lockdown, R.string.global_action_lockdown);
+            super(com.android.systemui.res.R.drawable.ic_global_actions_lockdown,
+                    R.string.global_action_lockdown);
         }
 
         @Override
@@ -1437,6 +1446,47 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
             return false;
         }
     }
+
+    @VisibleForTesting
+    class LockAction extends SinglePressAction {
+        LockAction() {
+            super(com.android.systemui.res.R.drawable.ic_global_actions_lockdown,
+                    R.string.global_action_unrestricted_lock);
+        }
+
+        @Override
+        public void onPress() {
+            mLockPatternUtils.requireStrongAuth(STRONG_AUTH_NOT_REQUIRED, UserHandle.USER_ALL);
+
+            mUiEventLogger.log(GlobalActionsEvent.GA_LOCK_PRESS);
+            try {
+                mIWindowManager.lockNow(null);
+                // Lock profiles (if any) on the background thread.
+                mBackgroundExecutor.execute(() -> lockProfiles());
+            } catch (RemoteException e) {
+                Log.e(TAG, "Error while trying to lock device.", e);
+            }
+        }
+
+        @Override
+        public boolean showDuringKeyguard() {
+            return false;
+        }
+
+        @Override
+        public boolean showBeforeProvisioning() {
+            return false;
+        }
+
+        @Override
+        public boolean shouldShow() {
+            // Only show the lock button when the device can show a lock screen and the device is
+            // unlocked.
+            return mKeyguardStateController.isMethodSecure()
+                && mKeyguardStateController.isUnlocked();
+        }
+    }
+
 
     private void lockProfiles() {
         final int currentUserId = getCurrentUser().id;
@@ -1708,7 +1758,10 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
             ImageView icon = view.findViewById(R.id.icon);
             TextView messageView = view.findViewById(R.id.message);
             messageView.setSelected(true); // necessary for marquee to work
-
+            if (Flags.globalActionsEmphasizedFont()) {
+                messageView.setTypeface(
+                        Typeface.create(FontStyles.GSF_LABEL_LARGE_EMPHASIZED, Typeface.NORMAL));
+            }
             icon.setImageDrawable(action.getIcon(mContext));
             icon.setScaleType(ScaleType.CENTER_CROP);
 
@@ -1788,6 +1841,10 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
                 textView.setText(action.getMessageResId());
             } else {
                 textView.setText(action.getMessage());
+            }
+            if (Flags.globalActionsEmphasizedFont()) {
+                textView.setTypeface(
+                        Typeface.create(FontStyles.GSF_LABEL_LARGE_EMPHASIZED, Typeface.NORMAL));
             }
             return textView;
         }
@@ -1981,20 +2038,21 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
 
             mIconView = v.findViewById(R.id.icon);
             TextView messageView = v.findViewById(R.id.message);
+            if (Flags.globalActionsEmphasizedFont()) {
+                messageView.setTypeface(
+                        Typeface.create(FontStyles.GSF_LABEL_LARGE_EMPHASIZED, Typeface.NORMAL));
+            }
             messageView.setSelected(true); // necessary for marquee to work
-
             mIconView.setImageDrawable(getIcon(context));
             mIconView.setScaleType(ScaleType.CENTER_CROP);
-            if (com.android.systemui.Flags.tvGlobalActionsFocus()) {
-                if (isTv()) {
-                    mIconView.setFocusable(true);
-                    mIconView.setClickable(true);
-                    mIconView.setBackground(mContext.getDrawable(com.android.systemui.res.R.drawable
-                                    .global_actions_lite_button_background));
-                    mIconView.setOnClickListener(i -> onClick());
-                    if (mItems.get(0) == this) {
-                        mIconView.requestFocus();
-                    }
+            if (isTv()) {
+                mIconView.setFocusable(true);
+                mIconView.setClickable(true);
+                mIconView.setBackground(mContext.getDrawable(
+                        com.android.systemui.res.R.drawable.global_actions_lite_button_background));
+                mIconView.setOnClickListener(i -> onClick());
+                if (mItems.get(0) == this) {
+                    mIconView.requestFocus();
                 }
             }
 
@@ -2136,6 +2194,10 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
 
             ImageView icon = (ImageView) v.findViewById(R.id.icon);
             TextView messageView = (TextView) v.findViewById(R.id.message);
+            if (Flags.globalActionsEmphasizedFont()) {
+                messageView.setTypeface(
+                        Typeface.create(FontStyles.GSF_LABEL_LARGE_EMPHASIZED, Typeface.NORMAL));
+            }
             final boolean enabled = isEnabled();
 
             if (messageView != null) {
@@ -2198,7 +2260,7 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
         }
 
         void onToggle(boolean on) {
-            if (mHasTelephony && TelephonyProperties.in_ecm_mode().orElse(false)) {
+            if (mHasTelephonyCalling && TelephonyProperties.in_ecm_mode().orElse(false)) {
                 mIsWaitingForEcmExit = true;
                 // Launch ECM exit dialog
                 Intent ecmDialogIntent =
@@ -2212,7 +2274,7 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
 
         @Override
         protected void changeStateFromPress(boolean buttonOn) {
-            if (!mHasTelephony) return;
+            if (!mHasTelephonyCalling) return;
 
             // In ECM mode airplane state cannot be changed
             if (!TelephonyProperties.in_ecm_mode().orElse(false)) {
@@ -2370,7 +2432,7 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
             new TelephonyCallback.ServiceStateListener() {
         @Override
         public void onServiceStateChanged(ServiceState serviceState) {
-            if (!mHasTelephony) return;
+            if (!mHasTelephonyCalling) return;
             if (mAirplaneModeOn == null) {
                 Log.d(TAG, "Service changed before actions created");
                 return;
@@ -2410,7 +2472,7 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
 
     private void onAirplaneModeChanged() {
         // Let the service state callbacks handle the state.
-        if (mHasTelephony || mAirplaneModeOn == null) return;
+        if (mHasTelephonyCalling || mAirplaneModeOn == null) return;
 
         boolean airplaneModeOn = mGlobalSettings.getInt(
                 Settings.Global.AIRPLANE_MODE_ON,
@@ -2436,7 +2498,7 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
         intent.addFlags(Intent.FLAG_RECEIVER_REPLACE_PENDING);
         intent.putExtra("state", on);
         mContext.sendBroadcastAsUser(intent, UserHandle.ALL);
-        if (!mHasTelephony) {
+        if (!mHasTelephonyCalling) {
             mAirplaneState = on ? ToggleState.On : ToggleState.Off;
         }
     }
@@ -2464,7 +2526,6 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
         protected float mScrimAlpha;
         protected final LightBarController mLightBarController;
         private final KeyguardStateController mKeyguardStateController;
-        protected final NotificationShadeWindowController mNotificationShadeWindowController;
         protected final TopUiController mTopUiController;
         private final StatusBarWindowController mStatusBarWindowController;
         private ListPopupWindow mOverflowPopup;
@@ -2549,7 +2610,6 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
                 IStatusBarService statusBarService,
                 LightBarController lightBarController,
                 KeyguardStateController keyguardStateController,
-                NotificationShadeWindowController notificationShadeWindowController,
                 TopUiController topUiController,
                 StatusBarWindowController statusBarWindowController,
                 Runnable onRefreshCallback,
@@ -2571,7 +2631,6 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
             mStatusBarService = statusBarService;
             mLightBarController = lightBarController;
             mKeyguardStateController = keyguardStateController;
-            mNotificationShadeWindowController = notificationShadeWindowController;
             mTopUiController = topUiController;
             mStatusBarWindowController = statusBarWindowController;
             mOnRefreshCallback = onRefreshCallback;
@@ -2822,11 +2881,7 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
         @Override
         public void show() {
             super.show();
-            if (TopUiControllerRefactor.isEnabled()) {
-                mTopUiController.setRequestTopUi(true, TAG);
-            } else {
-                mNotificationShadeWindowController.setRequestTopUi(true, TAG);
-            }
+            mTopUiController.setRequestTopUi(true, TAG);
 
             // By default this dialog windowAnimationStyle is null, and therefore windowAnimations
             // should be equal to 0 which means we need to animate the dialog in-window. If it's not
@@ -2923,11 +2978,7 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
         public void dismiss() {
             dismissOverflow();
             dismissPowerOptions();
-            if (TopUiControllerRefactor.isEnabled()) {
-                mTopUiController.setRequestTopUi(false, TAG);
-            } else {
-                mNotificationShadeWindowController.setRequestTopUi(false, TAG);
-            }
+            mTopUiController.setRequestTopUi(false, TAG);
             super.dismiss();
         }
 

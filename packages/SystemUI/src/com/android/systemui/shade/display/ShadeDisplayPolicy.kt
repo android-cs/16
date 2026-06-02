@@ -57,7 +57,7 @@ interface ShadeExpansionIntent {
 @Module(includes = [AllShadeDisplayPoliciesModule::class])
 interface ShadeDisplayPolicyModule {
 
-    @Binds fun provideDefaultPolicy(impl: DefaultDisplayShadePolicy): ShadeDisplayPolicy
+    @Binds fun provideDefaultPolicy(impl: StatusBarTouchShadeDisplayPolicy): ShadeDisplayPolicy
 
     @Binds
     fun provideShadeExpansionIntent(impl: StatusBarTouchShadeDisplayPolicy): ShadeExpansionIntent
@@ -68,11 +68,8 @@ internal object AllShadeDisplayPoliciesModule {
     @Provides
     @ElementsIntoSet
     fun provideShadeDisplayPolicies(
-        defaultPolicy: DefaultDisplayShadePolicy,
-        externalPolicy: AnyExternalShadeDisplayPolicy,
-        statusBarPolicy: StatusBarTouchShadeDisplayPolicy,
-        focusPolicy: FocusShadeDisplayPolicy,
+        statusBarPolicy: StatusBarTouchShadeDisplayPolicy
     ): Set<ShadeDisplayPolicy> {
-        return setOf(defaultPolicy, externalPolicy, statusBarPolicy, focusPolicy)
+        return setOf(statusBarPolicy)
     }
 }

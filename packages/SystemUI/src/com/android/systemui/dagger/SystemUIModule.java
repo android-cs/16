@@ -68,6 +68,7 @@ import com.android.systemui.desktop.dagger.DesktopModule;
 import com.android.systemui.deviceentry.DeviceEntryModule;
 import com.android.systemui.display.DisplayModule;
 import com.android.systemui.doze.dagger.DozeComponent;
+import com.android.systemui.doze.dagger.RootDozeModule;
 import com.android.systemui.dreams.dagger.DreamModule;
 import com.android.systemui.flags.FeatureFlags;
 import com.android.systemui.flags.FlagDependenciesModule;
@@ -85,6 +86,7 @@ import com.android.systemui.keyguard.ui.composable.LockscreenContent;
 import com.android.systemui.log.dagger.LogModule;
 import com.android.systemui.log.dagger.MonitorLog;
 import com.android.systemui.log.table.TableLogBuffer;
+import com.android.systemui.log.table.impl.TableLogBufferModule;
 import com.android.systemui.lowlight.dagger.LowLightModule;
 import com.android.systemui.lowlightclock.dagger.LowLightClockModule;
 import com.android.systemui.mediaprojection.MediaProjectionModule;
@@ -108,13 +110,16 @@ import com.android.systemui.qs.tiles.impl.qr.ui.model.QRCodeScannerModule;
 import com.android.systemui.recents.Recents;
 import com.android.systemui.recordissue.RecordIssueModule;
 import com.android.systemui.retail.RetailModeModule;
+import com.android.systemui.rotation.impl.RotationModule;
 import com.android.systemui.rotationlock.DeviceStateAutoRotateModule.BoundsDeviceStateAutoRotateModule;
 import com.android.systemui.scene.shared.model.SceneContainerConfig;
 import com.android.systemui.scene.shared.model.SceneDataSource;
 import com.android.systemui.scene.shared.model.SceneDataSourceDelegator;
 import com.android.systemui.scene.ui.view.WindowRootViewComponent;
+import com.android.systemui.screencapture.common.ScreenCaptureModule;
 import com.android.systemui.screenrecord.ScreenRecordModule;
 import com.android.systemui.screenshot.dagger.ScreenshotModule;
+import com.android.systemui.securelockdevice.dagger.SecureLockDeviceModule;
 import com.android.systemui.security.data.repository.SecurityRepositoryModule;
 import com.android.systemui.settings.UserTracker;
 import com.android.systemui.shade.ShadeController;
@@ -131,9 +136,10 @@ import com.android.systemui.statusbar.chips.StatusBarChipsModule;
 import com.android.systemui.statusbar.connectivity.ConnectivityModule;
 import com.android.systemui.statusbar.dagger.StatusBarModule;
 import com.android.systemui.statusbar.disableflags.dagger.DisableFlagsModule;
+import com.android.systemui.statusbar.domain.interactor.StatusBarRegionSamplingInteractorModule;
 import com.android.systemui.statusbar.events.StatusBarEventsModule;
 import com.android.systemui.statusbar.events.SystemStatusAnimationScheduler;
-import com.android.systemui.statusbar.featurepods.vc.AvControlsChipModule;
+import com.android.systemui.statusbar.featurepods.av.AvControlsChipModule;
 import com.android.systemui.statusbar.notification.NotifPipelineFlags;
 import com.android.systemui.statusbar.notification.collection.NotifPipeline;
 import com.android.systemui.statusbar.notification.collection.inflation.NotificationRowBinder;
@@ -149,6 +155,8 @@ import com.android.systemui.statusbar.notification.row.dagger.NotificationRowCom
 import com.android.systemui.statusbar.phone.CentralSurfaces;
 import com.android.systemui.statusbar.phone.ConfigurationControllerModule;
 import com.android.systemui.statusbar.phone.LetterboxModule;
+import com.android.systemui.statusbar.pipeline.airplane.data.repository.impl.AirplaneModeDataLayerModule;
+import com.android.systemui.statusbar.pipeline.airplane.shared.impl.AirplaneModeSharedModule;
 import com.android.systemui.statusbar.pipeline.dagger.StatusBarPipelineModule;
 import com.android.systemui.statusbar.policy.DeviceStateRotationLockSettingController;
 import com.android.systemui.statusbar.policy.KeyguardStateController;
@@ -166,6 +174,7 @@ import com.android.systemui.topui.TopUiController;
 import com.android.systemui.topui.TopUiModule;
 import com.android.systemui.touchpad.TouchpadModule;
 import com.android.systemui.tuner.dagger.TunerModule;
+import com.android.systemui.uimode.data.UiModeModule;
 import com.android.systemui.user.UserModule;
 import com.android.systemui.user.domain.UserDomainLayerModule;
 import com.android.systemui.util.EventLogModule;
@@ -176,8 +185,6 @@ import com.android.systemui.util.reference.ReferenceModule;
 import com.android.systemui.util.sensors.SensorModule;
 import com.android.systemui.util.settings.SettingsProxy;
 import com.android.systemui.util.settings.SettingsUtilModule;
-import com.android.systemui.util.time.SystemClock;
-import com.android.systemui.util.time.SystemClockImpl;
 import com.android.systemui.wallet.dagger.WalletModule;
 import com.android.systemui.wmshell.BubblesManager;
 import com.android.wm.shell.bubbles.Bubbles;
@@ -213,10 +220,12 @@ import javax.inject.Named;
 @Module(includes = {
         ActivityManagerModule.class,
         AmbientModule.class,
-        AvControlsChipModule.class,
         AppOpsModule.class,
+        AirplaneModeDataLayerModule.class,
+        AirplaneModeSharedModule.class,
         AssistModule.class,
         AuthenticationModule.class,
+        AvControlsChipModule.class,
         BiometricsModule.class,
         BiometricsDomainLayerModule.class,
         BouncerInteractorModule.class,
@@ -239,6 +248,7 @@ import javax.inject.Named;
         DeviceEntryModule.class,
         DisableFlagsModule.class,
         DisplayModule.class,
+        RootDozeModule.class,
         DreamModule.class,
         EventLogModule.class,
         FalsingModule.class,
@@ -269,10 +279,13 @@ import javax.inject.Named;
         RecordIssueModule.class,
         ReferenceModule.class,
         RetailModeModule.class,
+        RotationModule.class,
         ScreenBrightnessModule.class,
         ScreenshotModule.class,
+        SecureLockDeviceModule.class,
         SensorModule.class,
         SecurityRepositoryModule.class,
+        ScreenCaptureModule.class,
         ScreenRecordModule.class,
         SettingsUtilModule.class,
         SmartRepliesInflationModule.class,
@@ -282,6 +295,7 @@ import javax.inject.Named;
         StatusBarChipsModule.class,
         StatusBarPipelineModule.class,
         StatusBarPolicyModule.class,
+        StatusBarRegionSamplingInteractorModule.class,
         StatusBarViewBinderModule.class,
         StatusBarWindowModule.class,
         SystemPropertiesFlagsModule.class,
@@ -289,12 +303,14 @@ import javax.inject.Named;
         SysUIConcurrencyModule.class,
         SysUICoroutinesModule.class,
         CommonSystemUIUnfoldModule.class,
+        TableLogBufferModule.class,
         TelephonyRepositoryModule.class,
         TemporaryDisplayModule.class,
         ShadeDisplayAwareModule.class,
         TopUiModule.class,
         TouchpadModule.class,
         TunerModule.class,
+        UiModeModule.class,
         UserDomainLayerModule.class,
         UserModule.class,
         UtilModule.class,
@@ -337,6 +353,7 @@ public abstract class SystemUIModule {
     @Binds
     public abstract NotificationRowBinder bindNotificationRowBinder(
             NotificationRowBinderImpl notificationRowBinder);
+
 
     @SysUISingleton
     @Provides
@@ -408,10 +425,6 @@ public abstract class SystemUIModule {
     @BoundsDeviceStateAutoRotateModule
     abstract Optional<DeviceStateRotationLockSettingController>
             optionalDeviceStateRotationLockSettingController();
-
-    @SysUISingleton
-    @Binds
-    abstract SystemClock bindSystemClock(SystemClockImpl systemClock);
 
     // TODO: This should provided by the WM component
 
