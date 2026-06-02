@@ -1,0 +1,173 @@
+//########################################################################
+// Build WmTests package
+//########################################################################
+
+package {
+    // See: http://go/android-license-faq
+    // A large-scale-change added 'default_applicable_licenses' to import
+    // all of the 'license_kinds' from "frameworks_base_license"
+    // to get the below license kinds:
+    //   SPDX-license-identifier-Apache-2.0
+    default_applicable_licenses: ["frameworks_base_license"],
+}
+
+filegroup {
+    name: "wmtests-support-sources",
+    srcs: [
+        "src/com/android/server/wm/WindowManagerServiceTestSupport.kt",
+    ],
+    path: "src",
+    visibility: ["//visibility:private"],
+}
+
+java_library {
+    name: "wmtests-support",
+    srcs: [":wmtests-support-sources"],
+    static_libs: [
+        "com.android.window.flags.window-aconfig-java",
+        "kotlin-stdlib",
+        "services.core",
+    ],
+    lint: {
+        test: true,
+    },
+    visibility: [
+        "//frameworks/base/services/tests/wmtests",
+        "//frameworks/opt/car/services/updatableServices/tests",
+    ],
+}
+
+// Include all test files, but exclude test support files.
+filegroup {
+    name: "wmtests-sources",
+    srcs: ["src/**/*.java"],
+    exclude_srcs: [":wmtests-support-sources"],
+    path: "src",
+    visibility: ["//visibility:private"],
+}
+
+java_genrule {
+    name: "wmtests.protologsrc",
+    srcs: [
+        ":protolog-groups",
+        ":protolog-impl",
+        ":wmtests-sources",
+    ],
+    tools: ["protologtool"],
+    cmd: "$(location protologtool) transform-protolog-calls " +
+        "--protolog-class com.android.internal.protolog.ProtoLog " +
+        "--loggroups-class com.android.internal.protolog.WmProtoLogGroups " +
+        "--loggroups-jar $(location :protolog-groups) " +
+        // Used for the ProtoLogIntegrationTest, where don't test decoding or writing to file
+        // so the parameters below are irrelevant.
+        "--viewer-config-file-path /some/unused/file/path.pb " +
+        "--legacy-viewer-config-file-path /some/unused/file/path.json.gz " +
+        "--legacy-output-file-path /some/unused/file/path.winscope " +
+        // END of irrelevant params.
+        "--output-srcjar $(out) " +
+        "$(locations :wmtests-sources)",
+    out: ["wmtests.protolog.srcjar"],
+}
+
+android_test {
+    name: "WmTests",
+
+    // We only want this apk build for tests.
+    srcs: [
+        ":wmtests-sources",
+        "src/**/*.aidl",
+    ],
+
+    static_libs: [
+        "CtsSurfaceValidatorLib",
+        "android.view.inputmethod.flags-aconfig-java",
+        "androidx.test.rules",
+        "androidx.test.runner",
+        "com.android.window.flags.window-aconfig-java",
+        "cts-input-lib",
+        "flag-junit",
+        "flickerlib",
+        "frameworks-base-testutils",
+        "hamcrest-library",
+        "junit-params",
+        "mockito-kotlin2",
+        "mockito-target-extended-minus-junit4",
+        "platform-compat-test-rules",
+        "platform-test-annotations",
+        "service-permission.stubs.system_server",
+        "service-sdksandbox.impl",
+        "services.core",
+        "servicestests-utils",
+        "testables",
+        "testng",
+        "truth",
+        "wmtests-support",
+    ],
+
+    libs: [
+        "android.hardware.power-V1-java",
+        "android.test.base.stubs.system",
+        "android.test.mock.stubs.system",
+        "android.test.runner.stubs.system",
+    ],
+
+    defaults: [
+        "modules-utils-testable-device-config-defaults",
+    ],
+
+    // These are not normally accessible from apps so they must be explicitly included.
+    jni_libs: [
+        "libdexmakerjvmtiagent",
+        "libstaticjvmtiagent",
+    ],
+
+    platform_apis: true,
+    test_suites: [
+        "automotive-tests",
+        "device-tests",
+    ],
+
+    certificate: "platform",
+
+    dxflags: ["--multi-dex"],
+
+    optimize: {
+        enabled: false,
+    },
+
+    data: [
+        ":OverlayTestApp",
+    ],
+}
+
+test_module_config {
+    name: "WmTests_server_policy_Presubmit",
+    base: "WmTests",
+    test_suites: [
+        "automotive-tests",
+        "device-tests",
+    ],
+    include_filters: ["com.android.server.policy."],
+    include_annotations: ["android.platform.test.annotations.Presubmit"],
+}
+
+test_module_config {
+    name: "WmTests_server_policy",
+    base: "WmTests",
+    test_suites: [
+        "automotive-tests",
+        "device-tests",
+    ],
+    include_filters: ["com.android.server.policy."],
+}
+
+test_module_config {
+    name: "WmTests_wm_utils_Presubmit",
+    base: "WmTests",
+    test_suites: [
+        "automotive-tests",
+        "device-tests",
+    ],
+    include_filters: ["com.android.server.wm.utils"],
+    include_annotations: ["android.platform.test.annotations.Presubmit"],
+}

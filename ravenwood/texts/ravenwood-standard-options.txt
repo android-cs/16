@@ -1,0 +1,17 @@
+# File containing standard options to HostStubGen for Ravenwood
+
+# --debug # To enable debug log on consone
+
+# Keep all classes / methods / fields, but make the methods throw.
+--default-throw
+
+--delete-finals
+
+# Uncomment below lines to enable each feature.
+
+# Enable method call hook.
+#--default-method-call-hook
+#    android.platform.test.ravenwood.RavenwoodMethodCallLogger.logMethodCall
+
+#--default-class-load-hook
+#    com.android.hoststubgen.hosthelper.HostTestUtils.logClassLoaded
